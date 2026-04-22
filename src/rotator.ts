@@ -547,7 +547,6 @@ export class AccountRotator {
 			return {
 				email: a.config.email,
 				label: a.config.label || a.config.email,
-				type: a.config.type || "free",
 				status,
 				activeForModels,
 				requestsSinceRotation: a.requestsSinceRotation,

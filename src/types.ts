@@ -139,7 +139,6 @@ export interface StatusResponse {
 export interface AccountStatus {
 	email: string;
 	label: string;
-	type: AccountType;
 	status: "active" | "ready" | "cooldown" | "exhausted" | "disabled" | "flagged" | "error";
 	// Which models this account is currently active for
 	activeForModels: string[];

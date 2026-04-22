@@ -338,6 +338,15 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     flex-shrink: 0;
   }
 
+  .quota-reset {
+    font-size: 9px;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--text-dim);
+    width: 55px;
+    text-align: right;
+    flex-shrink: 0;
+  }
+
   .pulse { animation: pulse 2s ease-in-out infinite; }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
 </style>
@@ -401,11 +410,17 @@ function renderQuotaBars(quota) {
   var rows = quota.map(function(q) {
     var color = quotaBarColor(q.percentRemaining);
     var timerClass = 'timer-' + q.timerType;
+    var resetLabel = '';
+    if (q.resetTime && q.timerType !== 'fresh') {
+      var remaining = new Date(q.resetTime).getTime() - Date.now();
+      if (remaining > 0) resetLabel = formatDuration(remaining);
+    }
     return '<div class="quota-row">' +
       '<span class="quota-model">' + q.displayName + '</span>' +
       '<span class="quota-timer ' + timerClass + '">' + q.timerType + '</span>' +
       '<div class="quota-bar-bg"><div class="quota-bar-fill" style="width:' + q.percentRemaining + '%;background:' + color + '"></div></div>' +
       '<span class="quota-pct" style="color:' + color + '">' + q.percentRemaining + '%</span>' +
+      '<span class="quota-reset">' + (resetLabel || '--') + '</span>' +
     '</div>';
   }).join('');
   return '<div class="quota-section"><div class="quota-section-title">Quota (per model)</div>' + rows + '</div>';
