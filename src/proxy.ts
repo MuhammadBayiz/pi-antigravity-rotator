@@ -310,8 +310,9 @@ export function startProxy(rotator: AccountRotator, port: number): void {
 	const server = createServer((req, res) => {
 		const method = req.method?.toUpperCase();
 		const url = req.url || "";
+		const pathname = url.split("?")[0];
 
-		if (method === "GET" && (url === "/" || url === "/dashboard")) {
+		if (method === "GET" && (pathname === "/" || pathname === "/dashboard")) {
 			serveDashboard(res);
 			return;
 		}
