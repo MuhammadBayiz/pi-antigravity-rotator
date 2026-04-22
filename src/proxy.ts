@@ -246,6 +246,13 @@ async function handleProxyRequest(
 			if (upstream.status >= 500) {
 				const errorText = upstream.body ? await streamToString(upstream.body) : "";
 				log(`[${label}] Server error ${upstream.status}: ${errorText.slice(0, 200)}`);
+				// On 503, don't rotate -- it's a Google capacity issue, not an account issue
+				// Return the error to the agent so it can handle retries/backoff
+				if (upstream.status === 503) {
+					res.writeHead(503, { "Content-Type": "application/json" });
+					res.end(errorText || JSON.stringify({ error: "Server unavailable" }));
+					return;
+				}
 				rotator.markError(account, `${upstream.status}: ${errorText.slice(0, 200)}`);
 				await rotator.rotateToNext(body.model);
 				continue;

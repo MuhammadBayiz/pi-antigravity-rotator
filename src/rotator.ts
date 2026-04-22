@@ -87,6 +87,14 @@ export class AccountRotator {
 				account.flagged = saved.flagged ?? false;
 				}
 			}
+			// Cap any stale cooldowns to 30 min max from now
+			const maxCooldown = 30 * 60 * 1000;
+			const now = Date.now();
+			for (const account of this.accounts) {
+				if (account.cooldownUntil > now + maxCooldown) {
+					account.cooldownUntil = now + maxCooldown;
+				}
+			}
 			this.log("Loaded state from disk");
 		} catch {
 			this.log("Could not load state, starting fresh");
