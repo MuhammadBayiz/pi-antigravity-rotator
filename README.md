@@ -51,7 +51,7 @@ Re-running with the same email updates the existing entry.
 
 ## Dashboard
 
-After starting the proxy, open `http://localhost:51200/dashboard`.
+After starting the proxy, open `http://localhost:51200/dashboard` or `http://<your-server-ip>:51200/dashboard` from any machine on the same network (the proxy binds to `0.0.0.0`).
 
 The dashboard shows:
 
