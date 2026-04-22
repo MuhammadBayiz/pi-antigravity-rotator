@@ -1,17 +1,19 @@
 # Pi Antigravity Rotator
 
-Multi-account rotation proxy for Google Antigravity. Distributes API usage across multiple Google accounts using real-time quota tracking, automatic token management, and intelligent account selection to maximize uptime and minimize the risk of account flags.
+Multi-account rotation proxy for Google Antigravity. Distributes API usage across multiple Google accounts with per-model routing, real-time quota tracking, automatic token management, and infringement detection.
 
 ## Features
 
-- **Real-time quota monitoring** -- Polls Google's internal quota API every 5 minutes to track actual remaining usage per model (Gemini Pro, Flash, Claude)
-- **Smart rotation** -- Rotates accounts when quota drops by a configurable threshold (default: 20%)
-- **Timer-aware selection** -- Prioritizes accounts with fresh 7-day timers over short-lived 5-hour timers to optimize recharge cycles
-- **Automatic failover** -- On 429 rate limits, instantly switches to the next available account
-- **Token auto-refresh** -- Refresh tokens are exchanged for access tokens automatically; no manual token management
+- **Per-model routing** -- Each model (Gemini Pro, Flash, Claude) routes to its own active account independently. Multiple agents using different models won't interfere with each other.
+- **Real-time quota monitoring** -- Polls Google's quota API every 5 minutes to track remaining usage per model per account
+- **Per-model timer tracking** -- Timer priority (fresh/7d/5h) is evaluated per model using each model's actual `resetTime` from the quota API, not a per-account estimate
+- **Smart rotation** -- Rotates only the specific model whose quota dropped, leaving other models on their current accounts
+- **Infringement detection** -- On 403 with infringement/abuse/suspension keywords, the account is immediately flagged and excluded from routing
+- **Automatic failover** -- On 429 rate limits, instantly switches the affected model to the next available account
+- **Token auto-refresh** -- Tokens are refreshed automatically before expiry; no manual management
 - **Endpoint cascade** -- Tries daily, autopush, and prod API endpoints for resilience
-- **Web dashboard** -- Real-time view of all accounts, quota bars, timers, and rotation state
-- **State persistence** -- Survives restarts; account stats and cooldowns are saved to disk
+- **Web dashboard** -- Real-time view of model routing table, per-account quota bars with per-model timers, and flagged account alerts
+- **State persistence** -- Survives restarts; routing assignments, cooldowns, and flags are saved to disk
 
 ## Quick Start
 
@@ -32,76 +34,87 @@ npm start
 
 ## Adding Accounts
 
-Run `npm run login` once per Google account. The process is:
+Run `npm run login` once per Google account:
 
 1. A Google OAuth URL is printed to the terminal -- open it in your browser
 2. Complete the sign-in and grant permissions
 3. The browser redirects to a `localhost` URL that won't load -- this is expected
 4. Copy the **full URL** from the browser's address bar and paste it into the terminal
 
-That's it. The tool handles everything else:
+The tool automatically:
 
 - Creates or updates `accounts.json` with the account credentials
 - Configures `~/.pi/agent/models.json` to point `google-antigravity` at the proxy
 - Configures `~/.pi/agent/auth.json` with proxy-managed credentials
 
-To add more accounts, run `npm run login` again. Re-running with the same email updates the existing entry instead of creating a duplicate.
+Re-running with the same email updates the existing entry.
 
 ## Dashboard
 
-After starting the proxy, open `http://localhost:51200/dashboard` in your browser.
+After starting the proxy, open `http://localhost:51200/dashboard`.
 
-Each account card shows:
+The dashboard shows:
 
-- **Status badge** -- `active`, `ready`, `cooldown`, `disabled`, or `error`
-- **Timer badge** -- `fresh` (no active timers), `7d` (on 7-day timer), or `5h` (on 5-hour timer)
-- **Quota bars** -- Per-model remaining percentage (green > 60%, yellow > 30%, red below)
-- **Request counts** -- Requests since last rotation and total lifetime
-- **Timer countdowns** -- Remaining time on 5-hour and 7-day recharge cycles
-- **Token status** -- Whether the OAuth access token is currently valid
-
-Disabled accounts can be re-enabled directly from the dashboard.
+- **Model Routing table** -- Which account each model (Gemini Pro, Flash, Claude) is currently routed to
+- **Account cards** with:
+  - Status badge: `active`, `ready`, `cooldown`, `flagged`, `disabled`, or `error`
+  - Model badges: which models this account is currently serving
+  - Per-model quota bars with timer type (`fresh`/`7d`/`5h`) shown next to each bar
+  - Request counts, last used time, token status
+  - Error messages for flagged/errored accounts
+  - Re-enable button for flagged or disabled accounts
 
 ## How It Works
 
 ### Proxying
 
 ```
-Pi  -->  localhost:51200  -->  Google Antigravity API
-         (this proxy)         (daily / autopush / prod)
+Pi Agent 1 (Gemini Pro)  --->  localhost:51200  --->  Account A
+Pi Agent 2 (Claude)      --->  localhost:51200  --->  Account C
+Pi Agent 3 (Flash)       --->  localhost:51200  --->  Account A
+                               (this proxy)          (per-model routing)
 ```
 
-1. Pi sends requests to `localhost:51200` instead of the real Antigravity endpoint
-2. The proxy selects the best available account from the pool
-3. The `Authorization` header and `project` field in the request body are replaced with real credentials
-4. The request is forwarded to the Google API (trying daily, autopush, then prod endpoints)
-5. The SSE response streams back to pi transparently
+1. Pi sends a request to `localhost:51200` with a model name in the body
+2. The proxy resolves the model to a quota key (e.g., `gemini-3.1-pro`)
+3. The best available account for that specific model is selected
+4. The `Authorization` header and `project` field are swapped with real credentials
+5. The request is forwarded (trying daily, autopush, then prod endpoints)
+6. The SSE response streams back to pi transparently
 
-### Account Selection
+### Per-Model Account Selection
 
-When the proxy needs to rotate, it picks the next account using a priority system:
+Each model maintains its own active account. When the proxy needs to rotate a model, it picks the next account using a priority system:
 
 | Priority | Badge | Condition | Rationale |
 |----------|-------|-----------|-----------|
-| 1 (first) | `fresh` | No active timers | Start the 7-day clock ASAP so it resets sooner |
-| 2 | `7d` | 7-day timer running | Already ticking, keep using it |
-| 3 (last) | `5h` | 5-hour timer running | Short-lived pool; wasted if not fully consumed |
+| 1 (first) | `fresh` | No active timer for this model | Start the 7-day clock ASAP so it resets sooner |
+| 2 | `7d` | 7-day timer running for this model | Already ticking, keep using it |
+| 3 (last) | `5h` | 5-hour timer running for this model | Short-lived; wasted if not fully consumed |
 
-Within the same priority tier, the account with the most remaining quota wins.
+Within the same priority tier, the account with the most remaining quota for that model wins.
 
 ### Rotation Triggers
 
-Three mechanisms trigger account rotation, from proactive to reactive:
+Three mechanisms trigger rotation, scoped to the specific model:
 
-1. **Quota-based** (primary) -- The proxy polls the Google quota API every 5 minutes. When any model's remaining quota drops by `rotateOnQuotaDrop` percentage points (default: 20%) since the account became active, it rotates to the next account. This gives each account breathing room between uses.
+1. **Quota-based** (primary) -- Polls the Google quota API every 5 minutes. When a model's remaining quota drops by `rotateOnQuotaDrop` percentage points (default: 20%), that model rotates to the next account. Other models stay on their current accounts.
 
-2. **Request-count** (fallback) -- After `requestsPerRotation` requests (default: 5), the proxy rotates. This acts as a safety net when quota data isn't available yet.
+2. **Request-count** (fallback) -- After `requestsPerRotation` requests (default: 5), all models on that account rotate. Safety net for when quota data isn't available yet.
 
-3. **429 failover** (reactive) -- If Google returns a 429 or 5xx error, the account is marked as exhausted with a cooldown period and the proxy immediately switches to the next available account.
+3. **429 failover** (reactive) -- On rate limit or 5xx, the account is marked exhausted with a cooldown and the affected model immediately switches.
+
+### Infringement Detection
+
+On `403` responses, the proxy scans the error body for keywords indicating account flags:
+
+`infring`, `suspend`, `abus`, `terminat`, `violat`, `banned`, `policy`
+
+If detected, the account is **immediately flagged** and excluded from all model routing. No 5-error wait -- it's instant. The dashboard shows a red `flagged` badge with the error message. Use the Re-enable button to clear the flag after resolving the issue with Google.
 
 ## Configuration
 
-All configuration is in `accounts.json`, which is created automatically by `npm run login`. You can also edit it manually:
+All configuration is in `accounts.json`, created automatically by `npm run login`:
 
 ```json
 {
@@ -126,7 +139,7 @@ All configuration is in `accounts.json`, which is created automatically by `npm 
 |-------|---------|-------------|
 | `proxyPort` | `51200` | Port the proxy listens on |
 | `requestsPerRotation` | `5` | Max requests before rotating (fallback trigger) |
-| `rotateOnQuotaDrop` | `20` | Rotate when quota drops this many %. Set to `0` to disable quota-based rotation |
+| `rotateOnQuotaDrop` | `20` | Rotate when a model's quota drops this many %. Set to `0` to disable |
 | `quotaPollIntervalMs` | `300000` | Quota poll interval in ms (5 minutes) |
 
 ### Account Fields
@@ -136,20 +149,18 @@ All configuration is in `accounts.json`, which is created automatically by `npm 
 | `email` | Google account email (auto-filled by login) |
 | `refreshToken` | OAuth refresh token (auto-filled by login) |
 | `projectId` | Cloud project ID (auto-discovered during login) |
-| `label` | Display name shown in the dashboard (auto-filled, defaults to email username) |
+| `label` | Display name on the dashboard (auto-filled, defaults to email username) |
 
 ## API Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/dashboard` | Web dashboard UI |
-| `GET` | `/api/status` | JSON status of all accounts, quota, and timers |
-| `POST` | `/api/enable/<email>` | Re-enable a disabled account |
+| `GET` | `/dashboard` | Web dashboard |
+| `GET` | `/api/status` | JSON status: accounts, quotas, model routing, flags |
+| `POST` | `/api/enable/<email>` | Clear flagged/disabled state and re-enable an account |
 | `POST` | `/v1internal:streamGenerateContent` | Proxy endpoint (used by pi) |
 
 ## Running as a Service
-
-To keep the proxy running in the background:
 
 ```bash
 # Using nohup
@@ -173,11 +184,17 @@ WantedBy=multi-user.target
 
 ## Troubleshooting
 
+**Account shows `flagged` status**
+Google detected potential abuse. Review the error message on the dashboard. After resolving with Google, click Re-enable or `POST /api/enable/<email>`.
+
 **Account keeps getting disabled after 5 errors**
-Check the error message in the dashboard. Common causes: revoked OAuth consent, expired refresh token (re-run `npm run login` for that account), or Google account suspension.
+Check the error message. Common causes: revoked OAuth consent, expired refresh token (re-run `npm run login`), or Google account suspension.
 
 **Quota bars not showing**
-Quota data appears after the first poll cycle (up to 5 minutes after startup). Ensure the accounts have valid tokens -- check the Token status on the dashboard.
+Quota data appears after the first poll cycle (up to 5 minutes). Ensure accounts have valid tokens.
 
 **All accounts exhausted**
-The proxy will use the account with the shortest remaining cooldown. Consider adding more accounts or increasing `requestsPerRotation`.
+The proxy uses the account with the shortest remaining cooldown. Add more accounts or increase `requestsPerRotation`.
+
+**Multiple agents on different models**
+This is fully supported. Each model routes independently. Agent 1 using Gemini Pro and Agent 2 using Claude will each have their own active account and won't interfere with each other's rotation.
