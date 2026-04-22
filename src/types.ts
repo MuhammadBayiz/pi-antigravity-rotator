@@ -9,6 +9,8 @@ export interface AccountConfig {
 	label?: string;
 	// Optional - pro/free is detected dynamically from quota API reset times
 	type?: AccountType;
+	// This account owns the family plan and can never be removed from Pro
+	familyManager?: boolean;
 }
 
 export interface Config {
@@ -19,6 +21,8 @@ export interface Config {
 	rotateOnQuotaDrop: number;
 	// How often to poll quota (ms). Default: 5min
 	quotaPollIntervalMs: number;
+	// Max simultaneous Pro accounts (owner + members). Default: 6
+	proSlots?: number;
 }
 
 // Quota API response from Google
@@ -59,7 +63,7 @@ export const QUOTA_MODEL_KEYS: Record<string, { key: string; altKeys: string[]; 
 	},
 	claude: {
 		key: "claude-opus-4-6-thinking",
-		altKeys: ["claude-opus-4-5-thinking", "claude-opus-4-5", "claude-sonnet-4-6", "claude-sonnet-4-5"],
+		altKeys: ["claude-opus-4-5-thinking", "claude-opus-4-5", "claude-sonnet-4-6-thinking", "claude-sonnet-4-6", "claude-sonnet-4-5-thinking", "claude-sonnet-4-5"],
 		display: "Claude",
 	},
 };
@@ -134,6 +138,12 @@ export interface StatusResponse {
 	// Per-model active account
 	activeAccounts: Record<string, string>;
 	accounts: AccountStatus[];
+	// Pro family sharing advisor
+	proAdvisor: {
+		currentProCount: number;
+		maxProSlots: number;
+		actions: ProAdvisorAction[];
+	};
 }
 
 export interface AccountStatus {
@@ -151,6 +161,17 @@ export interface AccountStatus {
 	consecutiveErrors: number;
 	hasValidToken: boolean;
 	quota: ModelQuota[];
+	// Pro family sharing
+	proDetected: boolean;
+	familyManager: boolean;
+}
+
+// Pro advisor suggestion
+export interface ProAdvisorAction {
+	type: "add-pro" | "remove-pro";
+	email: string;
+	label: string;
+	reason: string;
 }
 
 // Antigravity OAuth constants (same as pi-mono)

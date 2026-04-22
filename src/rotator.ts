@@ -9,6 +9,7 @@ import {
 	type ModelQuota,
 	type ModelRotationState,
 	type PersistedState,
+	type ProAdvisorAction,
 	type StatusResponse,
 	CLIENT_ID,
 	CLIENT_SECRET,
@@ -614,6 +615,8 @@ export class AccountRotator {
 				consecutiveErrors: a.consecutiveErrors,
 				hasValidToken: !!(a.accessToken && a.tokenExpires > now),
 				quota: a.quota,
+				proDetected: this.isProAccount(a),
+				familyManager: !!a.config.familyManager,
 			};
 		});
 
@@ -624,6 +627,7 @@ export class AccountRotator {
 			totalRequestsAllAccounts: this.accounts.reduce((sum, a) => sum + a.totalRequests, 0),
 			uptime: now - this.startTime,
 			accounts,
+			proAdvisor: this.getProAdvisor(),
 		};
 	}
 
@@ -634,5 +638,91 @@ export class AccountRotator {
 	private log(msg: string): void {
 		const ts = new Date().toISOString().slice(11, 19);
 		console.log(`[${ts}] [rotator] ${msg}`);
+	}
+
+	// =========================================================================
+	// Pro Family Sharing Advisor
+	// =========================================================================
+
+	// Model keys relevant for Pro advisor decisions (ignore Flash)
+	private static PRO_ADVISOR_MODELS = ["gemini-3.1-pro", "claude-opus-4-6-thinking"];
+
+	private isProAccount(account: AccountRuntime): boolean {
+		return account.quota.some((q) => q.timerType === "5h");
+	}
+
+	private getProAdvisor(): StatusResponse["proAdvisor"] {
+		const maxSlots = this.config.proSlots ?? 6;
+		const proAccounts = this.accounts.filter((a) => !a.disabled && !a.flagged && this.isProAccount(a));
+		const currentProCount = proAccounts.length;
+		const actions: ProAdvisorAction[] = [];
+
+		// Suggest "remove-pro" for Pro accounts (not family manager) with 0% on all advisor models
+		for (const account of proAccounts) {
+			if (account.config.familyManager) continue;
+			const advisorQuotas = account.quota.filter((q) =>
+				AccountRotator.PRO_ADVISOR_MODELS.some((m) => q.modelKey.includes(m) || m.includes(q.modelKey)),
+			);
+			if (advisorQuotas.length === 0) continue;
+			const allExhausted = advisorQuotas.every((q) => q.percentRemaining === 0);
+			if (allExhausted) {
+				actions.push({
+					type: "remove-pro",
+					email: account.config.email,
+					label: account.config.label || account.config.email,
+					reason: "Pro quota exhausted on G3Pro and Claude",
+				});
+			}
+		}
+
+		// Suggest "add-pro" for Free accounts with 0% quota and long reset, if slots available
+		const slotsAvailable = maxSlots - currentProCount + actions.filter((a) => a.type === "remove-pro").length;
+		if (slotsAvailable > 0) {
+			const candidates: { account: AccountRuntime; maxResetMs: number }[] = [];
+
+			for (const account of this.accounts) {
+				if (account.disabled || account.flagged) continue;
+				if (this.isProAccount(account)) continue;
+
+				const advisorQuotas = account.quota.filter((q) =>
+					AccountRotator.PRO_ADVISOR_MODELS.some((m) => q.modelKey.includes(m) || m.includes(q.modelKey)),
+				);
+				if (advisorQuotas.length === 0) continue;
+
+				// Only suggest if at least one advisor model is at 0%
+				const hasExhausted = advisorQuotas.some((q) => q.percentRemaining === 0);
+				if (!hasExhausted) continue;
+
+				// Find the longest reset time among exhausted models
+				let maxResetMs = 0;
+				for (const q of advisorQuotas) {
+					if (q.percentRemaining === 0 && q.resetTime) {
+						const resetMs = new Date(q.resetTime).getTime() - Date.now();
+						if (resetMs > maxResetMs) maxResetMs = resetMs;
+					}
+				}
+
+				// Only suggest if reset is > 24h away (otherwise not worth the Pro slot)
+				if (maxResetMs > 24 * 60 * 60 * 1000) {
+					candidates.push({ account, maxResetMs });
+				}
+			}
+
+			// Sort by longest reset time first (maximizes benefit)
+			candidates.sort((a, b) => b.maxResetMs - a.maxResetMs);
+
+			for (const { account, maxResetMs } of candidates.slice(0, slotsAvailable)) {
+				const days = Math.floor(maxResetMs / (24 * 60 * 60 * 1000));
+				const hours = Math.floor((maxResetMs % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
+				actions.push({
+					type: "add-pro",
+					email: account.config.email,
+					label: account.config.label || account.config.email,
+					reason: `0% quota, resets in ${days}d ${hours}h`,
+				});
+			}
+		}
+
+		return { currentProCount, maxProSlots: maxSlots, actions };
 	}
 }

@@ -366,6 +366,82 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 
   .pulse { animation: pulse 2s ease-in-out infinite; }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+
+  .badge-pro { background: rgba(52, 211, 153, 0.15); color: var(--green); }
+  .badge-free { background: rgba(110, 110, 130, 0.08); color: var(--text-dim); }
+  .badge-fmgr { background: rgba(124, 92, 252, 0.15); color: var(--accent); font-size: 9px; }
+
+  .advisor-panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px 18px;
+    margin-bottom: 24px;
+  }
+
+  .advisor-title {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--text-dim);
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .advisor-slots {
+    font-size: 12px;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--text);
+    margin-left: auto;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+
+  .advisor-action {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    margin-bottom: 6px;
+    border-radius: 8px;
+    font-size: 12px;
+  }
+
+  .advisor-action.add-pro {
+    background: rgba(52, 211, 153, 0.06);
+    border-left: 3px solid var(--green);
+  }
+
+  .advisor-action.remove-pro {
+    background: rgba(251, 191, 36, 0.06);
+    border-left: 3px solid var(--yellow);
+  }
+
+  .advisor-action-type {
+    font-weight: 600;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    flex-shrink: 0;
+  }
+
+  .advisor-action.add-pro .advisor-action-type {
+    background: rgba(52, 211, 153, 0.15);
+    color: var(--green);
+  }
+
+  .advisor-action.remove-pro .advisor-action-type {
+    background: rgba(251, 191, 36, 0.15);
+    color: var(--yellow);
+  }
+
+  .advisor-action-label { font-weight: 500; }
+  .advisor-action-reason { color: var(--text-dim); font-size: 11px; margin-left: auto; }
+  .advisor-empty { color: var(--text-dim); font-size: 12px; font-style: italic; }
 </style>
 </head>
 <body>
@@ -396,6 +472,8 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 </div>
 
 <div class="model-routing" id="modelRouting"></div>
+
+<div class="advisor-panel" id="proAdvisor" style="display:none"></div>
 
 <div class="accounts-grid" id="accounts"></div>
 
@@ -501,6 +579,8 @@ function renderAccounts(data) {
       '<div class="card-header">' +
         '<div class="card-label">' + maskText(a.label) + '</div>' +
         '<div class="card-badges">' +
+          (a.proDetected ? '<span class="badge badge-pro">PRO</span>' : '<span class="badge badge-free">FREE</span>') +
+          (a.familyManager ? '<span class="badge badge-fmgr">FAMILY MGR</span>' : '') +
           '<span class="badge badge-' + a.status + (isActive ? ' pulse' : '') + '">' + a.status + '</span>' +
           modelBadges +
         '</div>' +
@@ -529,6 +609,8 @@ function renderAccounts(data) {
       (isCooldown && cooldownPercent > 0 ? '<div class="cooldown-bar" style="width:' + cooldownPercent + '%"></div>' : '') +
     '</div>';
   }).join('');
+
+  renderProAdvisor(data.proAdvisor);
 }
 
 var MASK_MODE = new URLSearchParams(window.location.search).has('mask');
@@ -553,6 +635,28 @@ function maskEmail(email) {
 async function enableAccount(email) {
   await fetch('/api/enable/' + encodeURIComponent(email), { method: 'POST' });
   refresh();
+}
+
+function renderProAdvisor(advisor) {
+  var panel = document.getElementById('proAdvisor');
+  if (!advisor) { panel.style.display = 'none'; return; }
+  panel.style.display = 'block';
+  var title = '<div class="advisor-title">Pro Family Advisor' +
+    '<span class="advisor-slots">Slots: ' + advisor.currentProCount + '/' + advisor.maxProSlots + '</span></div>';
+  if (advisor.actions.length === 0) {
+    panel.innerHTML = title + '<div class="advisor-empty">No actions recommended</div>';
+    return;
+  }
+  var rows = advisor.actions.map(function(a) {
+    var cls = a.type === 'add-pro' ? 'add-pro' : 'remove-pro';
+    var typeLabel = a.type === 'add-pro' ? 'Add Pro' : 'Remove Pro';
+    return '<div class="advisor-action ' + cls + '">' +
+      '<span class="advisor-action-type">' + typeLabel + '</span>' +
+      '<span class="advisor-action-label">' + maskText(a.label) + '</span>' +
+      '<span class="advisor-action-reason">' + a.reason + '</span>' +
+    '</div>';
+  }).join('');
+  panel.innerHTML = title + rows;
 }
 
 async function refresh() {

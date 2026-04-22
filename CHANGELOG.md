@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-04-22
+
+### Added
+- Pro Family Sharing Advisor: dashboard panel suggests when to add/remove accounts from Pro family sharing.
+- Pro/Free/Family Manager badges on account cards (auto-detected from 5h/7d timer type).
+- `familyManager` config flag for the account that owns the family plan.
+- `proSlots` config option for max simultaneous Pro accounts (default 6).
+- Advisor prioritizes accounts by longest reset time when suggesting Pro upgrades.
+- Only G3Pro and Claude quotas considered for remove-pro decisions (Flash ignored).
+
+
 ## [1.2.0] - 2026-04-22
 
 ### Added
