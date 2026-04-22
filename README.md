@@ -121,23 +121,26 @@ Three mechanisms trigger rotation, scoped to the specific model:
 
 The proxy detects blocked/suspended accounts at three levels:
 
-1. **Quota API check** (on startup + every poll) -- If the quota API returns `403 PERMISSION_DENIED` with "violation of Terms of Service", the account is immediately flagged. This catches suspended accounts before any request is wasted.
+1. **Quota API check** (on startup + every poll) -- If the quota API returns `403 PERMISSION_DENIED` with "violation of Terms of Service", the account is immediately flagged.
 
-2. **API endpoint 401** (on request) -- If all 3 endpoints (daily, autopush, prod) reject the token with `401 UNAUTHENTICATED`, the account is flagged. The proxy cascades through all endpoints before giving up.
+2. **API 401** (on request) -- If the prod endpoint rejects the token with `401 UNAUTHENTICATED`, the account is flagged.
 
-3. **API endpoint 403** (on request) -- If the response body contains infringement keywords (`infring`, `suspend`, `abus`, `terminat`, `violat`, `banned`, `policy`, `forbidden`), the account is flagged.
+3. **API 403** (on request) -- If the response body contains infringement keywords (`infring`, `suspend`, `abus`, `terminat`, `violat`, `banned`, `policy`, `forbidden`), the account is flagged.
 
-Flagged accounts are **immediately excluded** from all model routing. The dashboard shows a red `FLAGGED` badge with the error message. Use the Re-enable button or `POST /api/enable/<email>` to clear the flag after resolving the issue with Google.
+Flagged accounts are **immediately excluded** from all model routing. The dashboard shows a red `FLAGGED` badge with the error message. Use the Re-enable button or `POST /api/enable/<email>` to clear the flag.
 
-### Endpoint Cascade
+### Cooldown Management
 
-The proxy tries three Google API endpoints in order for each request:
+- Cooldowns are capped at **30 minutes** max
+- Stale cooldowns from previous sessions are capped on startup
+- Use `POST /api/reset-cooldowns` to clear all cooldowns at once
+- Quota-based rotation only triggers if a healthy account is available; the proxy won't rotate away from a working account if there's no better alternative
 
-1. `daily-cloudcode-pa.sandbox.googleapis.com`
-2. `autopush-cloudcode-pa.sandbox.googleapis.com`
-3. `cloudcode-pa.googleapis.com` (prod)
+### Error Handling
 
-On `401`, `403`, or `404`, it cascades to the next endpoint. Only the final endpoint's response is used for flagging decisions.
+- **429** (rate limit) -- account is marked exhausted with cooldown, rotates to next
+- **503** (no capacity) -- returned directly to the agent for its own retry/backoff
+- **5xx** (other server errors) -- account error counter incremented, rotates to next
 
 ## Configuration
 
@@ -195,6 +198,7 @@ pi-antigravity-rotator start --config-dir /path/to/config
 | `GET` | `/dashboard` | Web dashboard |
 | `GET` | `/api/status` | JSON status: accounts, quotas, model routing, flags |
 | `POST` | `/api/enable/<email>` | Clear flagged/disabled state and re-enable an account |
+| `POST` | `/api/reset-cooldowns` | Clear all cooldowns on all accounts |
 | `POST` | `/v1internal:streamGenerateContent` | Proxy endpoint (used by pi) |
 
 ## Running as a Service
