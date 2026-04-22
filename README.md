@@ -67,7 +67,7 @@ After starting the proxy, open `http://localhost:51200/dashboard` or `http://<yo
 The dashboard shows:
 
 - **Model Routing table** -- Which account each model (Gemini Pro, Flash, Claude) is currently routed to
-- **Account cards** with:
+- **Account cards** sorted by total quota (highest first), flagged/disabled last:
   - Status badge: `active`, `ready`, `cooldown`, `flagged`, `disabled`, or `error`
   - Model badges: which models this account is currently serving
   - Per-model quota bars with timer type (`fresh`/`7d`/`5h`) and reset countdown
@@ -141,7 +141,17 @@ On `401`, `403`, or `404`, it cascades to the next endpoint. Only the final endp
 
 ## Configuration
 
-All configuration is in `accounts.json`, created automatically by `npm run login`:
+Config files (`accounts.json`, `state.json`) are stored in `~/.pi-antigravity-rotator/` by default. Override with:
+
+```bash
+# Environment variable
+export PI_ROTATOR_DIR=/path/to/config
+
+# Or CLI flag
+pi-antigravity-rotator start --config-dir /path/to/config
+```
+
+`accounts.json` is created automatically by the login command:
 
 ```json
 {

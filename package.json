@@ -20,6 +20,8 @@
   "keywords": [
     "pi-package",
     "pi",
+    "pi-coding",
+    "pi-coding-agent",
     "antigravity",
     "proxy",
     "rotation",
@@ -31,7 +33,7 @@
     "type": "git",
     "url": "https://github.com/tuxevil/pi-antigravity-rotator.git"
   },
-  "author": "tuxevil",
+  "author": "Sebastián Real (tuxevil)",
   "dependencies": {
     "tsx": "^4.19.0"
   },
