@@ -195,6 +195,21 @@ async function handleProxyRequest(
 				continue;
 			}
 
+			if (upstream.status === 403) {
+				const errorText = upstream.body ? await streamToString(upstream.body) : "";
+				const lower = errorText.toLowerCase();
+				const flagPatterns = ["infring", "suspend", "abus", "terminat", "violat", "banned", "policy"];
+				const isFlagged = flagPatterns.some((p) => lower.includes(p));
+
+				if (isFlagged) {
+					log(`[${label}] FLAGGED: ${errorText.slice(0, 200)}`);
+					rotator.markFlagged(account, errorText.slice(0, 300));
+					await rotator.rotateToNext(body.model);
+					continue;
+				}
+				// Non-infringement 403 falls through to cascade in forwardRequest
+			}
+
 			if (upstream.status >= 500) {
 				const errorText = upstream.body ? await streamToString(upstream.body) : "";
 				log(`[${label}] Server error ${upstream.status}: ${errorText.slice(0, 200)}`);

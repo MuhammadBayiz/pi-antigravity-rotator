@@ -53,6 +53,7 @@ export class AccountRotator {
 			lastError: null,
 			consecutiveErrors: 0,
 			disabled: false,
+			flagged: false,
 		}));
 	}
 
@@ -83,6 +84,7 @@ export class AccountRotator {
 					account.cooldownUntil = saved.cooldownUntil;
 					account.quotaExhaustedAt = saved.quotaExhaustedAt;
 					account.disabled = saved.disabled;
+				account.flagged = saved.flagged ?? false;
 				}
 			}
 			this.log("Loaded state from disk");
@@ -108,6 +110,7 @@ export class AccountRotator {
 				cooldownUntil: account.cooldownUntil,
 				quotaExhaustedAt: account.quotaExhaustedAt,
 				disabled: account.disabled,
+			flagged: account.flagged,
 			};
 		}
 		try {
@@ -436,6 +439,7 @@ export class AccountRotator {
 		const account = this.accounts.find((a) => a.config.email === email);
 		if (!account) return false;
 		account.disabled = false;
+		account.flagged = false;
 		account.consecutiveErrors = 0;
 		account.lastError = null;
 		account.cooldownUntil = 0;
@@ -491,8 +495,17 @@ export class AccountRotator {
 
 	private isAvailable(account: AccountRuntime, now: number): boolean {
 		if (account.disabled) return false;
+		if (account.flagged) return false;
 		if (account.cooldownUntil > now) return false;
 		return true;
+	}
+
+	// Mark an account as flagged for infringement/abuse. Immediately excluded from rotation.
+	markFlagged(account: AccountRuntime, reason: string): void {
+		account.flagged = true;
+		account.lastError = reason;
+		this.log(`${account.config.email}: FLAGGED - ${reason}`);
+		this.saveState();
 	}
 
 	getStatus(): StatusResponse {
@@ -517,7 +530,9 @@ export class AccountRotator {
 			}
 
 			let status: AccountStatus["status"];
-			if (a.disabled) {
+			if (a.flagged) {
+				status = "flagged";
+			} else if (a.disabled) {
 				status = "disabled";
 			} else if (a.consecutiveErrors > 0 && !a.disabled) {
 				status = "error";

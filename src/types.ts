@@ -98,6 +98,7 @@ export interface AccountRuntime {
 	lastError: string | null;
 	consecutiveErrors: number;
 	disabled: boolean; // permanently disabled (revoked token, etc.)
+	flagged: boolean; // flagged for infringement/abuse by Google
 }
 
 // Per-model rotation state tracked by the rotator
@@ -119,6 +120,7 @@ export interface PersistedState {
 			cooldownUntil: number;
 			quotaExhaustedAt: number;
 			disabled: boolean;
+			flagged: boolean;
 		}
 	>;
 }
@@ -138,7 +140,7 @@ export interface AccountStatus {
 	email: string;
 	label: string;
 	type: AccountType;
-	status: "active" | "ready" | "cooldown" | "exhausted" | "disabled" | "error";
+	status: "active" | "ready" | "cooldown" | "exhausted" | "disabled" | "flagged" | "error";
 	// Which models this account is currently active for
 	activeForModels: string[];
 	requestsSinceRotation: number;

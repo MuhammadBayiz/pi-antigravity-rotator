@@ -178,6 +178,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   .account-card.active { border-color: var(--accent); box-shadow: 0 0 20px var(--accent-glow); }
   .account-card.cooldown { border-color: rgba(251, 191, 36, 0.3); }
   .account-card.disabled { opacity: 0.5; }
+  .account-card.flagged { opacity: 0.6; border-color: rgba(255, 68, 68, 0.4); }
 
   .card-header {
     display: flex;
@@ -213,6 +214,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   .badge-exhausted { background: rgba(248, 113, 113, 0.15); color: var(--red); }
   .badge-disabled { background: rgba(248, 113, 113, 0.1); color: #888; }
   .badge-error { background: rgba(251, 146, 60, 0.15); color: var(--orange); }
+  .badge-flagged { background: rgba(248, 113, 113, 0.25); color: #ff4444; font-weight: 700; }
   .badge-model { background: rgba(124, 92, 252, 0.1); color: var(--accent); }
 
   .card-email {
@@ -442,7 +444,7 @@ function renderAccounts(data) {
   container.innerHTML = data.accounts.map(function(a) {
     var isActive = a.status === 'active';
     var isCooldown = a.status === 'cooldown' || a.status === 'exhausted';
-    var isDisabled = a.status === 'disabled';
+    var isDisabled = a.status === 'disabled' || a.status === 'flagged';
 
     var cooldownPercent = 0;
     if (isCooldown && a.cooldownRemaining > 0) {
