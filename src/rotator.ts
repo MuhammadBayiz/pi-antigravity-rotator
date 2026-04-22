@@ -170,10 +170,21 @@ export class AccountRotator {
 				} else {
 					const drop = mState.quotaAtRotationStart - modelQuota;
 					if (drop >= this.config.rotateOnQuotaDrop) {
-						this.log(
-							`${account.config.label || account.config.email} [${modelKey}]: quota dropped ${drop}% (${mState.quotaAtRotationStart}% -> ${modelQuota}%), rotating`,
+						// Only rotate if there's a healthy account to rotate to
+						const hasHealthy = this.accounts.some(
+							(a, idx) => idx !== mState.activeAccountIndex && this.isAvailable(a, Date.now()),
 						);
-						await this.rotateModel(modelKey);
+						if (hasHealthy) {
+							this.log(
+								`${account.config.label || account.config.email} [${modelKey}]: quota dropped ${drop}% (${mState.quotaAtRotationStart}% -> ${modelQuota}%), rotating`,
+							);
+							await this.rotateModel(modelKey);
+						} else {
+							this.log(
+								`${account.config.label || account.config.email} [${modelKey}]: quota dropped ${drop}% but no healthy accounts available, staying`,
+							);
+							mState.quotaAtRotationStart = modelQuota; // Reset baseline
+						}
 					}
 				}
 			}
@@ -453,6 +464,22 @@ export class AccountRotator {
 		this.saveState();
 		this.log(`${email}: re-enabled`);
 		return true;
+	}
+
+	resetAllCooldowns(): number {
+		let count = 0;
+		for (const account of this.accounts) {
+			if (account.cooldownUntil > Date.now()) {
+				account.cooldownUntil = 0;
+				account.quotaExhaustedAt = 0;
+				count++;
+			}
+		}
+		if (count > 0) {
+			this.saveState();
+			this.log(`Reset cooldowns on ${count} accounts`);
+		}
+		return count;
 	}
 
 	async ensureValidToken(account: AccountRuntime): Promise<void> {

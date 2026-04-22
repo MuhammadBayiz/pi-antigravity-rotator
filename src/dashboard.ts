@@ -22,6 +22,12 @@ export function serveEnableApi(res: ServerResponse, rotator: AccountRotator, ema
 	res.end(JSON.stringify({ ok, email }));
 }
 
+export function serveResetCooldownsApi(res: ServerResponse, rotator: AccountRotator): void {
+	const count = rotator.resetAllCooldowns();
+	res.writeHead(200, { "Content-Type": "application/json" });
+	res.end(JSON.stringify({ ok: true, resetCount: count }));
+}
+
 const DASHBOARD_HTML = `<!DOCTYPE html>
 <html lang="en">
 <head>

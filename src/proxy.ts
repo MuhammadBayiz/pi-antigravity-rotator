@@ -4,9 +4,10 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { ANTIGRAVITY_ENDPOINTS } from "./types.js";
 import type { AccountRuntime } from "./types.js";
 import type { AccountRotator } from "./rotator.js";
-import { serveDashboard, serveStatusApi, serveEnableApi } from "./dashboard.js";
+import { serveDashboard, serveStatusApi, serveEnableApi, serveResetCooldownsApi } from "./dashboard.js";
 
 const MAX_ENDPOINT_RETRIES = 3;
+const MAX_COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes max cooldown
 
 interface RequestBody {
 	project: string;
@@ -71,6 +72,10 @@ function extractRetryDelay(errorText: string, headers: Headers): number {
 
 	// Default: 60 seconds
 	return 60_000;
+}
+
+function capCooldown(ms: number): number {
+	return Math.min(ms, MAX_COOLDOWN_MS);
 }
 
 /**
@@ -193,7 +198,7 @@ async function handleProxyRequest(
 			if (upstream.status === 429) {
 				// Rate limited - extract delay, mark exhausted, try next account
 				const errorText = upstream.body ? await streamToString(upstream.body) : "";
-				const cooldownMs = extractRetryDelay(errorText, upstream.headers);
+				const cooldownMs = capCooldown(extractRetryDelay(errorText, upstream.headers));
 				log(`[${label}] 429 rate limited, cooldown ${Math.ceil(cooldownMs / 1000)}s`);
 				rotator.markExhausted(account, cooldownMs);
 				await rotator.rotateToNext(body.model);
@@ -320,6 +325,11 @@ export function startProxy(rotator: AccountRotator, port: number): void {
 		if (method === "POST" && url.startsWith("/api/enable/")) {
 			const email = decodeURIComponent(url.slice("/api/enable/".length));
 			serveEnableApi(res, rotator, email);
+			return;
+		}
+
+		if (method === "POST" && url === "/api/reset-cooldowns") {
+			serveResetCooldownsApi(res, rotator);
 			return;
 		}
 
