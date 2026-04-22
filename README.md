@@ -1,69 +1,44 @@
 # Pi Antigravity Rotator
 
-Reverse proxy that manages multiple Google Antigravity accounts and rotates between them to distribute quota usage.
+Reverse proxy that manages multiple Google Antigravity accounts and rotates between them based on real-time quota tracking.
 
 ## Setup
 
 ### 1. Install
 
 ```bash
-cd tools/antigravity-rotator
 npm install
 ```
 
 ### 2. Add accounts
 
-Login with each Google account (run once per account):
+Run once per Google account:
 
 ```bash
 npm run login
 ```
 
-This opens a browser for Google OAuth. After login, it prints the credentials to add to `accounts.json`.
+1. Open the printed URL in your browser
+2. Complete the Google sign-in
+3. Copy the full URL from your browser (the page won't load -- that's expected)
+4. Paste it back into the terminal
 
-Copy `accounts.example.json` to `accounts.json` and paste in the credentials:
+The tool automatically:
+- Adds the account to `accounts.json` (creates it if missing)
+- Configures `~/.pi/agent/models.json` with the proxy `baseUrl`
+- Configures `~/.pi/agent/auth.json` with proxy-managed credentials
 
-```bash
-cp accounts.example.json accounts.json
-```
+Repeat for each account. Re-running with the same email updates the existing entry.
 
-### 3. Configure pi
-
-Add to `~/.pi/agent/models.json`:
-
-```json
-{
-  "providers": {
-    "google-antigravity": {
-      "baseUrl": "http://localhost:51200"
-    }
-  }
-}
-```
-
-Add a dummy credential to `~/.pi/agent/auth.json` (create if it doesn't exist):
-
-```json
-{
-  "google-antigravity": {
-    "type": "oauth",
-    "refresh": "proxy-managed",
-    "access": "proxy-managed",
-    "expires": 32503680000000,
-    "projectId": "proxy-managed"
-  }
-}
-```
-
-### 4. Start the proxy
+### 3. Start the proxy
 
 ```bash
 npm start
 ```
 
-### 5. Open the dashboard
+### 4. Dashboard
 
-Visit `http://localhost:51200/dashboard` to monitor account status.
+Visit `http://localhost:51200/dashboard` to monitor account status, quota levels, and rotation.
 
 ## Configuration
 
@@ -72,34 +47,48 @@ Visit `http://localhost:51200/dashboard` to monitor account status.
 | Field | Description |
 |-------|-------------|
 | `proxyPort` | Proxy listen port (default: 51200) |
-| `requestsPerRotation` | Requests per account before rotating (default: 5) |
-| `rotateOnQuotaDrop` | Rotate when any model's quota drops this many percentage points (default: 20). Set to 0 to disable quota-based rotation. |
-| `quotaPollIntervalMs` | How often to poll Google's quota API in milliseconds (default: 300000 / 5min) |
-| `accounts[].email` | Google account email |
-| `accounts[].refreshToken` | OAuth refresh token (from `npm run login`) |
-| `accounts[].projectId` | Cloud project ID (auto-discovered during login) |
-| `accounts[].label` | Display name for dashboard |
-| `accounts[].type` | `"pro"` or `"free"` (affects quota timer tracking) |
-
-## Quota Timer Tracking
-
-- **Pro accounts**: 5-hour short timer + 7-day long timer, 40% recharge on long timer
-- **Free accounts**: 7-day timer only, 100% usage
-
-The proxy tracks these timers per account and displays them on the dashboard.
+| `requestsPerRotation` | Max requests per account before rotating (default: 5) |
+| `rotateOnQuotaDrop` | Rotate when any model's quota drops this many percentage points (default: 20). Set to 0 to disable. |
+| `quotaPollIntervalMs` | How often to poll Google's quota API in ms (default: 300000 / 5min) |
+| `accounts[].email` | Google account email (auto-filled) |
+| `accounts[].refreshToken` | OAuth refresh token (auto-filled) |
+| `accounts[].projectId` | Cloud project ID (auto-discovered) |
+| `accounts[].label` | Display name for dashboard (auto-filled) |
 
 ## How It Works
 
+### Proxying
+
 1. Pi sends requests to `localhost:51200` instead of the real Antigravity endpoint
-2. The proxy picks the current active account from the pool
+2. The proxy picks the best available account from the pool
 3. It swaps the `Authorization` header and `project` field with real credentials
-4. The request is forwarded to the real endpoint (with cascade: daily -> autopush -> prod)
+4. The request is forwarded to the real endpoint (cascade: daily -> autopush -> prod)
 5. The SSE response is streamed back transparently to pi
-6. After N requests (configurable), the proxy rotates to the next account
-7. On 429 (rate limit), the proxy marks the account as exhausted and immediately fails over to the next one
+
+### Rotation Strategy
+
+Accounts are selected by **timer priority**:
+
+| Priority | Label | Condition | Rationale |
+|----------|-------|-----------|-----------|
+| 1 (first) | `fresh` | No active timers | Start the 7-day clock ASAP so it resets sooner |
+| 2 | `7d` | On 7-day timer | Already ticking, keep using it |
+| 3 (last) | `5h` | On 5-hour timer | Short-lived, save for last (wasted if not fully consumed) |
+
+Within the same tier, the account with the highest remaining quota is selected.
+
+### Rotation Triggers
+
+- **Quota-based** (primary): Polls the Google quota API every 5min. When any model's quota drops by 20% (configurable), rotate.
+- **Request-count** (fallback): After `requestsPerRotation` requests, rotate.
+- **429 failover** (reactive): On rate limit, mark exhausted and immediately switch.
+
+### Token Management
+
+Tokens are automatically refreshed before expiry. No manual token management needed.
 
 ## API
 
-- `GET /dashboard` - Web dashboard
-- `GET /api/status` - JSON status of all accounts
-- `POST /api/enable/<email>` - Re-enable a disabled account
+- `GET /dashboard` -- Web dashboard
+- `GET /api/status` -- JSON status of all accounts
+- `POST /api/enable/<email>` -- Re-enable a disabled account
