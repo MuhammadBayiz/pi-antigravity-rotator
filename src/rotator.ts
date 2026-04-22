@@ -195,7 +195,14 @@ export class AccountRotator {
 				signal: AbortSignal.timeout(8000),
 			});
 
-			if (!response.ok) return;
+			if (!response.ok) {
+				if (response.status === 401 || response.status === 403) {
+					const errorText = await response.text();
+					this.log(`${account.config.email}: quota API returned ${response.status}, flagging account`);
+					this.markFlagged(account, `Quota API ${response.status}: ${errorText.slice(0, 300)}`);
+				}
+				return;
+			}
 
 			const data = (await response.json()) as GoogleQuotaResponse;
 			account.quota = this.extractQuotas(data);
