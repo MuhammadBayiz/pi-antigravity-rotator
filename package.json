@@ -5,17 +5,17 @@
   "license": "MIT",
   "type": "module",
   "bin": {
-    "pi-antigravity-rotator": "./src/cli.ts"
+    "pi-antigravity-rotator": "bin/pi-antigravity-rotator.js"
   },
   "scripts": {
     "start": "tsx src/cli.ts start",
     "login": "tsx src/cli.ts login"
   },
   "files": [
+    "bin/",
     "src/",
     "README.md",
-    "LICENSE",
-    "dashboard.png"
+    "LICENSE"
   ],
   "keywords": [
     "pi",
