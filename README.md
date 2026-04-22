@@ -59,10 +59,12 @@ The dashboard shows:
 - **Account cards** with:
   - Status badge: `active`, `ready`, `cooldown`, `flagged`, `disabled`, or `error`
   - Model badges: which models this account is currently serving
-  - Per-model quota bars with timer type (`fresh`/`7d`/`5h`) shown next to each bar
+  - Per-model quota bars with timer type (`fresh`/`7d`/`5h`) and reset countdown
   - Request counts, last used time, token status
   - Error messages for flagged/errored accounts
   - Re-enable button for flagged or disabled accounts
+
+![Dashboard](dashboard.png)
 
 ## How It Works
 
