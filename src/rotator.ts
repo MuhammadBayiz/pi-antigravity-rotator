@@ -1,7 +1,6 @@
 // Account rotation and token management with per-model routing
 
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
-import { join, dirname } from "node:path";
 import {
 	type AccountRuntime,
 	type AccountStatus,
@@ -20,8 +19,9 @@ import {
 	QUOTA_MODEL_KEYS,
 	resolveQuotaModelKey,
 } from "./types.js";
+import { getStatePath } from "./paths.js";
 
-const STATE_FILE = join(dirname(new URL(import.meta.url).pathname), "..", "state.json");
+const STATE_FILE = getStatePath();
 
 export class AccountRotator {
 	private accounts: AccountRuntime[] = [];

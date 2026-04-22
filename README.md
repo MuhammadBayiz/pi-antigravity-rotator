@@ -17,12 +17,23 @@ Multi-account rotation proxy for Google Antigravity. Distributes API usage acros
 
 ## Quick Start
 
+### Option A: Install from npm
+
 ```bash
-# Clone the repository
+npm install -g pi-antigravity-rotator
+
+# Add your first account
+pi-antigravity-rotator login
+
+# Start the proxy
+pi-antigravity-rotator start
+```
+
+### Option B: Clone from source
+
+```bash
 git clone https://github.com/tuxevil/pi-antigravity-rotator.git
 cd pi-antigravity-rotator
-
-# Install dependencies
 npm install
 
 # Add your first account

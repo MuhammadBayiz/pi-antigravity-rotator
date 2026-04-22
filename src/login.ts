@@ -6,9 +6,10 @@
 
 import { createInterface } from "node:readline";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join } from "node:path";
 import { homedir } from "node:os";
 import { CLIENT_ID, CLIENT_SECRET, TOKEN_URL } from "./types.js";
+import { getAccountsPath } from "./paths.js";
 
 const REDIRECT_URI = "http://localhost:51121/oauth-callback";
 const SCOPES = [
@@ -21,8 +22,7 @@ const SCOPES = [
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const DEFAULT_PROJECT_ID = "rising-fact-p41fc";
 
-const BASE_DIR = join(dirname(new URL(import.meta.url).pathname), "..");
-const ACCOUNTS_FILE = join(BASE_DIR, "accounts.json");
+const ACCOUNTS_FILE = getAccountsPath();
 const PI_DIR = join(homedir(), ".pi", "agent");
 const PI_MODELS_FILE = join(PI_DIR, "models.json");
 const PI_AUTH_FILE = join(PI_DIR, "auth.json");
@@ -240,7 +240,7 @@ function ensurePiAuthConfig(): void {
 // Main
 // =========================================================================
 
-async function main(): Promise<void> {
+export async function runLogin(): Promise<void> {
 	console.log("=== Pi Antigravity Rotator - Add Account ===");
 	console.log();
 
@@ -355,7 +355,10 @@ async function main(): Promise<void> {
 	console.log("Run 'npm start' to start the proxy.");
 }
 
-main().catch((err) => {
-	console.error("Login failed:", err);
-	process.exit(1);
-});
+// Direct execution
+if (process.argv[1]?.includes("login")) {
+	runLogin().catch((err) => {
+		console.error("Login failed:", err);
+		process.exit(1);
+	});
+}

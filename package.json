@@ -1,13 +1,36 @@
 {
   "name": "pi-antigravity-rotator",
   "version": "1.0.0",
+  "description": "Multi-account rotation proxy for Google Antigravity with per-model routing, real-time quota tracking, and infringement detection",
   "license": "MIT",
-  "private": true,
   "type": "module",
-  "scripts": {
-    "start": "tsx src/index.ts",
-    "login": "tsx src/login.ts"
+  "bin": {
+    "pi-antigravity-rotator": "./src/cli.ts"
   },
+  "scripts": {
+    "start": "tsx src/cli.ts start",
+    "login": "tsx src/cli.ts login"
+  },
+  "files": [
+    "src/",
+    "README.md",
+    "LICENSE",
+    "dashboard.png"
+  ],
+  "keywords": [
+    "pi",
+    "antigravity",
+    "proxy",
+    "rotation",
+    "google",
+    "quota",
+    "gemini"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tuxevil/pi-antigravity-rotator.git"
+  },
+  "author": "tuxevil",
   "dependencies": {
     "tsx": "^4.19.0"
   },

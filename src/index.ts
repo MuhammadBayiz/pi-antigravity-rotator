@@ -1,27 +1,25 @@
 // Entry point - loads config and starts the proxy
 
 import { readFileSync, existsSync } from "node:fs";
-import { join, dirname } from "node:path";
 import type { Config } from "./types.js";
 import { AccountRotator } from "./rotator.js";
 import { startProxy } from "./proxy.js";
-
-const BASE_DIR = join(dirname(new URL(import.meta.url).pathname), "..");
-const CONFIG_PATH = join(BASE_DIR, "accounts.json");
+import { getAccountsPath } from "./paths.js";
 
 function loadConfig(): Config {
-	if (!existsSync(CONFIG_PATH)) {
-		console.error(`Config not found: ${CONFIG_PATH}`);
-		console.error("Copy accounts.example.json to accounts.json and add your credentials.");
+	const configPath = getAccountsPath();
+	if (!existsSync(configPath)) {
+		console.error(`Config not found: ${configPath}`);
+		console.error("Run 'pi-antigravity-rotator login' to add your first account.");
 		process.exit(1);
 	}
 
 	try {
-		const raw = readFileSync(CONFIG_PATH, "utf-8");
+		const raw = readFileSync(configPath, "utf-8");
 		const config: Config = JSON.parse(raw);
 
 		if (!config.accounts || config.accounts.length === 0) {
-			console.error("No accounts configured in accounts.json");
+			console.error("No accounts configured. Run 'pi-antigravity-rotator login' to add one.");
 			process.exit(1);
 		}
 
@@ -33,12 +31,12 @@ function loadConfig(): Config {
 
 		return config;
 	} catch (err) {
-		console.error(`Failed to parse ${CONFIG_PATH}: ${err}`);
+		console.error(`Failed to parse ${configPath}: ${err}`);
 		process.exit(1);
 	}
 }
 
-function main(): void {
+export function main(): void {
 	console.log("=== Pi Antigravity Rotator ===");
 	console.log();
 
@@ -57,4 +55,7 @@ function main(): void {
 	startProxy(rotator, config.proxyPort);
 }
 
-main();
+// Direct execution
+if (process.argv[1]?.includes("index")) {
+	main();
+}
