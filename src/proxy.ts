@@ -195,10 +195,19 @@ async function handleProxyRequest(
 				continue;
 			}
 
+			if (upstream.status === 401) {
+				// Token was valid but API rejected it - account is blocked
+				const errorText = upstream.body ? await streamToString(upstream.body) : "";
+				log(`[${label}] BLOCKED (401): ${errorText.slice(0, 200)}`);
+				rotator.markFlagged(account, `Account blocked (401): ${errorText.slice(0, 300)}`);
+				await rotator.rotateToNext(body.model);
+				continue;
+			}
+
 			if (upstream.status === 403) {
 				const errorText = upstream.body ? await streamToString(upstream.body) : "";
 				const lower = errorText.toLowerCase();
-				const flagPatterns = ["infring", "suspend", "abus", "terminat", "violat", "banned", "policy"];
+				const flagPatterns = ["infring", "suspend", "abus", "terminat", "violat", "banned", "policy", "forbidden"];
 				const isFlagged = flagPatterns.some((p) => lower.includes(p));
 
 				if (isFlagged) {
