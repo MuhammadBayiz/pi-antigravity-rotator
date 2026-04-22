@@ -215,7 +215,7 @@ async function handleProxyRequest(
 			if (response.status === 403) {
 				const errorText = await response.text().catch(() => "");
 				const lower = errorText.toLowerCase();
-				const flagPatterns = ["infring", "suspend", "abus", "terminat", "violat", "banned", "policy", "forbidden"];
+				const flagPatterns = ["infring", "suspend", "abus", "terminat", "violat", "banned", "policy", "forbidden", "verif"];
 				const isFlagged = flagPatterns.some((p) => lower.includes(p));
 
 				if (isFlagged) {
