@@ -254,6 +254,17 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     word-break: break-all;
   }
 
+  .card-hint {
+    margin-top: 6px;
+    padding: 8px 10px;
+    background: rgba(250, 204, 21, 0.08);
+    border-radius: 8px;
+    border-left: 3px solid var(--yellow);
+    font-size: 11px;
+    color: var(--yellow);
+    line-height: 1.4;
+  }
+
   .card-actions { margin-top: 10px; display: flex; gap: 8px; }
 
   .btn-enable {
@@ -506,7 +517,12 @@ function renderAccounts(data) {
           (a.hasValidToken ? 'var(--green)' : 'var(--text-dim)') + '">' +
           (a.hasValidToken ? 'Valid' : 'Expired') + '</div></div>' +
       '</div>' +
-      (a.lastError ? '<div class="card-error">' + a.lastError.slice(0, 150) + '</div>' : '') +
+      (a.lastError ? '<div class="card-error">' + a.lastError.slice(0, 150) + '</div>' +
+        (a.lastError.toLowerCase().includes('verif') ?
+          '<div class="card-hint">Fix: Open Antigravity IDE, sign in with this account, and complete the verification prompt. Then click Re-enable.</div>' :
+        a.lastError.toLowerCase().includes('terms of service') ?
+          '<div class="card-hint">This account was suspended by Google. Submit an appeal at <a href="https://support.google.com/accounts/troubleshooter/2402620" target="_blank" style="color:var(--cyan)">Google Account Recovery</a>, then Re-enable.</div>' :
+          '') : '') +
       (isDisabled ? '<div class="card-actions"><button class="btn-enable" onclick="enableAccount(\\'' +
         a.email + '\\')">Re-enable</button></div>' : '') +
       (isCooldown && cooldownPercent > 0 ? '<div class="cooldown-bar" style="width:' + cooldownPercent + '%"></div>' : '') +
