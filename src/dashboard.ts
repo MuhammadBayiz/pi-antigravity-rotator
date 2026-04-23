@@ -215,6 +215,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
     gap: 14px;
+    margin-bottom: 24px;
   }
 
   .account-card {
