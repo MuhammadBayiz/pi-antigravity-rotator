@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+## [1.3.2] - 2026-04-23
+
+### Added
+- Routing health panel in the dashboard with current state, stop reason, retry window, and pool blocker counts.
+- Attention Needed summary panel for flagged, cooling, disabled, and error accounts.
+- Recent Events feed showing the latest rotator and proxy incidents that led to the current state.
+- In-memory event buffer exposed through the status API for dashboard diagnostics.
+- Conservative concurrency guardrail to cap each account to one in-flight request by default.
+- Protective pause after serious provider ToS/abuse-style flags to stop the rest of the pool from being burned.
+
+### Changed
+- Dashboard now focuses on operator visibility so the service can be monitored without relying on `journalctl`.
+- Request-count rotation is now only used when quota data is still unknown, reducing unnecessary account churn.
+- Flagged accounts remain quarantined until the provider explicitly restores access.
+
+### Fixed
+- Fixed the exhausted fallback path so cooled-down accounts are no longer selected again when all accounts are exhausted.
+- Fixed proxy retry behavior so it returns `503` immediately when no healthy replacement account exists instead of continuing to hammer the pool.
+- Fixed quota polling so flagged accounts are no longer re-polled every cycle after a provider `403`.
+- Fixed bursty same-account pressure by reserving accounts during selection and request handling.
+
 ## [1.3.1] - 2026-04-22
 
 ### Changed
