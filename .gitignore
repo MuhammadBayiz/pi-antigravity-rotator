@@ -3,3 +3,4 @@ dist/
 accounts.json
 state.json
 *.log
+cheatsheet.md

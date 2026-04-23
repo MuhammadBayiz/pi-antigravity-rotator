@@ -78,11 +78,16 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 
   .header {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
+    gap: 16px;
     margin-bottom: 28px;
     padding-bottom: 20px;
     border-bottom: 1px solid var(--border);
+  }
+
+  .header-main {
+    min-width: 0;
   }
 
   .header h1 {
@@ -96,7 +101,9 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 
   .header-stats {
     display: flex;
+    align-items: center;
     gap: 24px;
+    flex-wrap: wrap;
     font-size: 13px;
     color: var(--text-dim);
   }
@@ -107,21 +114,102 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     font-weight: 500;
   }
 
-  .stats-row {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-    gap: 12px;
-    margin-bottom: 24px;
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
   }
 
-  .stat-card {
+  .header-icon-btn {
+    width: 40px;
+    height: 40px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,0.03);
+    color: var(--text-dim);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    position: relative;
+    transition: border-color 0.2s, background 0.2s, color 0.2s, transform 0.2s;
+  }
+
+  .header-icon-btn:hover {
+    border-color: #35354b;
+    background: rgba(255,255,255,0.06);
+    color: var(--text);
+    transform: translateY(-1px);
+  }
+
+  .header-icon-btn svg {
+    width: 18px;
+    height: 18px;
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 1.8;
+  }
+
+  .header-icon-btn.attention.has-items {
+    color: var(--yellow);
+    border-color: rgba(251, 191, 36, 0.4);
+  }
+
+  .header-icon-btn.advisor.has-items {
+    color: var(--accent);
+    border-color: rgba(124, 92, 252, 0.42);
+  }
+
+  .header-icon-badge {
+    position: absolute;
+    top: -5px;
+    right: -5px;
+    min-width: 18px;
+    height: 18px;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 5px;
+    font-size: 10px;
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 700;
+    color: #fff;
+    background: var(--red);
+    border: 2px solid var(--bg);
+  }
+
+  .header-icon-badge.attention { background: var(--yellow); color: #17120a; }
+  .header-icon-badge.advisor { background: var(--accent); }
+
+  .summary-panel {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 16px 18px;
+    padding: 18px;
+    margin-bottom: 24px;
   }
 
-  .stat-card .label {
+  .summary-title {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--text-dim);
+    margin-bottom: 14px;
+  }
+
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+  }
+
+  .summary-metric {
+    min-width: 0;
+  }
+
+  .summary-metric .label {
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.8px;
@@ -129,10 +217,17 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     margin-bottom: 6px;
   }
 
-  .stat-card .value {
+  .summary-metric .value {
     font-size: 24px;
     font-weight: 700;
     font-family: 'JetBrains Mono', monospace;
+  }
+
+  .summary-metric .hint {
+    margin-top: 6px;
+    font-size: 11px;
+    color: var(--text-dim);
+    line-height: 1.35;
   }
 
   .model-routing {
@@ -650,47 +745,141 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     color: var(--text-dim);
     padding: 10px 2px 2px;
   }
+  .modal {
+    position: fixed;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: rgba(5, 5, 10, 0.72);
+    backdrop-filter: blur(10px);
+    z-index: 50;
+  }
+  .modal.open { display: flex; }
+  .modal-card {
+    width: min(820px, 100%);
+    max-height: min(78vh, 920px);
+    overflow: auto;
+    background: linear-gradient(180deg, rgba(20,20,31,0.98), rgba(14,14,22,0.98));
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 18px;
+    box-shadow: 0 28px 120px rgba(0,0,0,0.45);
+    padding: 18px;
+  }
+  .modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+  .modal-header strong {
+    font-size: 14px;
+    letter-spacing: 0.02em;
+  }
+  .modal-close {
+    width: 34px;
+    height: 34px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-dim);
+    cursor: pointer;
+    font-size: 18px;
+    line-height: 1;
+  }
+  .modal-close:hover {
+    color: var(--text);
+    border-color: #35354b;
+  }
+  .modal-empty {
+    font-size: 12px;
+    color: var(--text-dim);
+    padding: 8px 2px 2px;
+  }
+  @media (max-width: 820px) {
+    body { padding: 18px; }
+    .header { flex-direction: column; align-items: stretch; }
+    .header-actions { justify-content: flex-start; }
+    .summary-grid { grid-template-columns: 1fr; gap: 14px; }
+    .model-route .model-name { width: 138px; }
+  }
 </style>
 </head>
 <body>
 
 <div class="header">
-  <h1>Pi Antigravity Rotator</h1>
-  <div class="header-stats">
-    Uptime: <span id="uptime">--</span> |
-    Port: <span id="port">--</span> |
-    Rotation: <span id="rotation">--</span> reqs |
-    Updated: <span id="lastRefresh">--</span> |
-    <button id="maskBtn" onclick="toggleMask()" style="background:none;border:1px solid var(--border);color:var(--text-dim);padding:2px 8px;border-radius:4px;cursor:pointer;font-size:12px;font-family:inherit;">PII: Visible</button>
+  <div class="header-main">
+    <h1>Pi Antigravity Rotator</h1>
+    <div class="header-stats">
+      Uptime: <span id="uptime">--</span> |
+      Port: <span id="port">--</span> |
+      Rotation: <span id="rotation">--</span> reqs |
+      Updated: <span id="lastRefresh">--</span> |
+      <button id="maskBtn" onclick="toggleMask()" style="background:none;border:1px solid var(--border);color:var(--text-dim);padding:2px 8px;border-radius:4px;cursor:pointer;font-size:12px;font-family:inherit;">PII: Visible</button>
+    </div>
+  </div>
+  <div class="header-actions">
+    <button class="header-icon-btn attention" id="attentionBtn" onclick="openModal('attentionModal')" title="Attention Needed" aria-label="Open attention needed">
+      <svg viewBox="0 0 24 24"><path d="M12 8v5"/><path d="M12 17.5h.01"/><path d="M10.3 3.8 2.9 17a2 2 0 0 0 1.75 3h14.7A2 2 0 0 0 21.1 17L13.7 3.8a2 2 0 0 0-3.4 0Z"/></svg>
+      <span class="header-icon-badge attention" id="attentionBadge" style="display:none">0</span>
+    </button>
+    <button class="header-icon-btn advisor" id="advisorBtn" onclick="openModal('advisorModal')" title="Pro Family Advisor" aria-label="Open Pro Family Advisor">
+      <svg viewBox="0 0 24 24"><path d="m5 15 2-9 5 5 5-5 2 9"/><path d="M4 19h16"/></svg>
+      <span class="header-icon-badge advisor" id="advisorBadge" style="display:none">0</span>
+    </button>
   </div>
 </div>
 
-<div class="stats-row">
-  <div class="stat-card">
-    <div class="label">Total Requests</div>
-    <div class="value" id="totalRequests">0</div>
-  </div>
-  <div class="stat-card">
-    <div class="label">Accounts</div>
-    <div class="value" id="accountCounts">0</div>
-  </div>
-  <div class="stat-card">
-    <div class="label">Healthy</div>
-    <div class="value" id="healthyCount" style="color:var(--green)">0</div>
+<div class="summary-panel">
+  <div class="summary-title">Fleet Summary</div>
+  <div class="summary-grid">
+    <div class="summary-metric">
+      <div class="label">Total Requests</div>
+      <div class="value" id="totalRequests">0</div>
+      <div class="hint">All requests served across the current runtime and persisted account counters.</div>
+    </div>
+    <div class="summary-metric">
+      <div class="label">Accounts</div>
+      <div class="value" id="accountCounts">0</div>
+      <div class="hint" id="accountBreakdown">0 active pool members visible to the rotator.</div>
+    </div>
+    <div class="summary-metric">
+      <div class="label">Healthy</div>
+      <div class="value" id="healthyCount" style="color:var(--green)">0</div>
+      <div class="hint" id="healthyHint">0 accounts are ready to serve immediately.</div>
+    </div>
   </div>
 </div>
-
-<div class="routing-panel state-stopped" id="routingHealth"></div>
-
-<div class="operator-panel" id="attentionPanel" style="display:none"></div>
-
-<div class="events-panel" id="recentEventsPanel" style="display:none"></div>
 
 <div class="model-routing" id="modelRouting"></div>
 
-<div class="advisor-panel" id="proAdvisor" style="display:none"></div>
+<div class="routing-panel state-stopped" id="routingHealth"></div>
 
 <div class="accounts-grid" id="accounts"></div>
+
+<div class="events-panel" id="recentEventsPanel" style="display:none"></div>
+
+<div class="modal" id="attentionModal" onclick="closeModal(event, 'attentionModal')">
+  <div class="modal-card" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <strong>Attention Needed</strong>
+      <button class="modal-close" onclick="closeModal(null, 'attentionModal')" aria-label="Close attention modal">×</button>
+    </div>
+    <div id="attentionPanel"></div>
+  </div>
+</div>
+
+<div class="modal" id="advisorModal" onclick="closeModal(event, 'advisorModal')">
+  <div class="modal-card" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <strong>Pro Family Advisor</strong>
+      <button class="modal-close" onclick="closeModal(null, 'advisorModal')" aria-label="Close advisor modal">×</button>
+    </div>
+    <div id="proAdvisor"></div>
+  </div>
+</div>
 
 <script>
 function formatDuration(ms) {
@@ -760,14 +949,21 @@ function renderModelRouting(activeAccounts) {
 
 function renderAccounts(data) {
   var now = Date.now();
+  var healthyCount = data.accounts.filter(function(a) { return a.status === 'active' || a.status === 'ready'; }).length;
   document.getElementById('uptime').textContent = formatDuration(data.uptime);
   document.getElementById('port').textContent = data.proxyPort;
   document.getElementById('rotation').textContent = data.requestsPerRotation;
   document.getElementById('lastRefresh').textContent = new Date(now).toLocaleTimeString();
   document.getElementById('totalRequests').textContent = data.totalRequestsAllAccounts;
   document.getElementById('accountCounts').textContent = data.accounts.length;
-  document.getElementById('healthyCount').textContent =
-    data.accounts.filter(function(a) { return a.status === 'active' || a.status === 'ready'; }).length;
+  document.getElementById('healthyCount').textContent = healthyCount;
+  document.getElementById('accountBreakdown').textContent =
+    (data.accounts.length - (data.routingHealth.flaggedCount || 0) - (data.routingHealth.disabledCount || 0)) +
+    ' non-quarantined accounts in circulation, ' +
+    (data.routingHealth.flaggedCount || 0) + ' flagged, ' +
+    (data.routingHealth.disabledCount || 0) + ' disabled.';
+  document.getElementById('healthyHint').textContent =
+    healthyCount + ' accounts are immediately usable; ' + (data.routingHealth.cooldownCount || 0) + ' are cooling down.';
 
   var routingHealth = document.getElementById('routingHealth');
   var health = data.routingHealth || {};
@@ -898,6 +1094,8 @@ function renderHealthPill(label, value) {
 
 function renderAttentionPanel(data) {
   var panel = document.getElementById('attentionPanel');
+  var button = document.getElementById('attentionBtn');
+  var badge = document.getElementById('attentionBadge');
   var accounts = data.accounts || [];
   var flagged = accounts.filter(function(a) { return a.status === 'flagged'; });
   var disabled = accounts.filter(function(a) { return a.status === 'disabled'; });
@@ -938,13 +1136,16 @@ function renderAttentionPanel(data) {
   }
 
   if (items.length === 0) {
-    panel.style.display = 'none';
-    panel.innerHTML = '';
+    panel.innerHTML = '<div class="modal-empty">No operator action items right now.</div>';
+    badge.style.display = 'none';
+    button.classList.remove('has-items');
     return;
   }
 
-  panel.style.display = 'block';
   panel.innerHTML = '<div class="operator-title">Attention Needed</div><div class="operator-list">' + items.join('') + '</div>';
+  badge.style.display = 'inline-flex';
+  badge.textContent = String(items.length);
+  button.classList.add('has-items');
 }
 
 function renderAttentionItem(title, description, meta) {
@@ -1048,12 +1249,20 @@ async function setAccountFreshWindowOverride(email, enabled) {
 
 function renderProAdvisor(advisor) {
   var panel = document.getElementById('proAdvisor');
-  if (!advisor) { panel.style.display = 'none'; return; }
-  panel.style.display = 'block';
+  var button = document.getElementById('advisorBtn');
+  var badge = document.getElementById('advisorBadge');
+  if (!advisor) {
+    panel.innerHTML = '<div class="modal-empty">No advisor data available.</div>';
+    badge.style.display = 'none';
+    button.classList.remove('has-items');
+    return;
+  }
   var title = '<div class="advisor-title">Pro Family Advisor' +
     '<span class="advisor-slots">Slots: ' + advisor.currentProCount + '/' + advisor.maxProSlots + '</span></div>';
   if (advisor.actions.length === 0) {
     panel.innerHTML = title + '<div class="advisor-empty">No actions recommended</div>';
+    badge.style.display = 'none';
+    button.classList.remove('has-items');
     return;
   }
   var rows = advisor.actions.map(function(a) {
@@ -1066,6 +1275,20 @@ function renderProAdvisor(advisor) {
     '</div>';
   }).join('');
   panel.innerHTML = title + rows;
+  badge.style.display = 'inline-flex';
+  badge.textContent = String(advisor.actions.length);
+  button.classList.add('has-items');
+}
+
+function openModal(id) {
+  var modal = document.getElementById(id);
+  if (modal) modal.classList.add('open');
+}
+
+function closeModal(event, id) {
+  if (event) event.stopPropagation();
+  var modal = document.getElementById(id);
+  if (modal) modal.classList.remove('open');
 }
 
 async function refresh() {
@@ -1089,6 +1312,13 @@ function toggleMask() {
   }
   window.location.href = url.toString();
 }
+
+document.addEventListener('keydown', function(event) {
+  if (event.key === 'Escape') {
+    closeModal(null, 'attentionModal');
+    closeModal(null, 'advisorModal');
+  }
+});
 
 refresh();
 setInterval(refresh, 3000);
