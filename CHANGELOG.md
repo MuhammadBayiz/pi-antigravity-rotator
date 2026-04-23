@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [1.3.3] - 2026-04-23
+
+### Added
+- Hosted Antigravity login flow so operators can complete Google account linking from a browser and feed the callback URL back into the rotator workflow.
+- Global fresh-window operator control plus per-account override so dormant quota windows can be blocked pool-wide and selectively re-enabled account by account.
+- Header modal launchers for Attention Needed and Pro Family Advisor to keep operator actions available without taking permanent dashboard space.
+
+### Changed
+- Reworked the dashboard layout to prioritize the account grid above the fold: request totals moved into the header, bulky summary widgets were removed, and Recent Events now sits at the bottom.
+- Simplified the header by moving the PII visibility toggle next to the title and removing the inline model-routing pills.
+- Tightened the routing health strip with denser pills, single-line counters, and clearer spacing between major dashboard sections.
+
 ## [1.3.2] - 2026-04-23
 
 ### Added
