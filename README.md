@@ -6,7 +6,7 @@ Multi-account rotation proxy for Google Antigravity. Distributes API usage acros
 
 - **Per-model routing** -- Each model (Gemini Pro, Flash, Claude) routes to its own active account independently. Multiple agents using different models won't interfere with each other.
 - **Real-time quota monitoring** -- Polls Google's quota API every 5 minutes to track remaining usage per model per account
-- **Per-model timer tracking** -- Timer priority (fresh/7d/5h) is evaluated per model using each model's actual `resetTime` from the quota API, not a per-account estimate
+- **Per-model timer tracking** -- Timer classification (`fresh`/`7d`/`5h`) is evaluated per model using each model's actual `resetTime` from the quota API, not a per-account estimate
 - **Smart rotation** -- Rotates only the specific model whose quota dropped, leaving other models on their current accounts
 - **Infringement detection** -- On 403 with infringement/abuse/suspension keywords, the account is immediately flagged and excluded from routing
 - **Automatic failover** -- On 429 rate limits, instantly switches the affected model to the next available account
@@ -128,11 +128,17 @@ Each model maintains its own active account. When the proxy needs to rotate a mo
 
 | Priority | Badge | Condition | Rationale |
 |----------|-------|-----------|-----------|
-| 1 (first) | `fresh` | No active timer for this model | Start the 7-day clock ASAP so it resets sooner |
-| 2 | `7d` | 7-day timer running for this model | Already ticking, keep using it |
-| 3 (last) | `5h` | 5-hour timer running for this model | Short-lived; wasted if not fully consumed |
+| 1 (first) | `5h` | Short reset window is already active for this model | Drain short-window quota before it recharges |
+| 2 | `7d` | Long reset window is already active for this model | Already ticking, so it is still worth using |
+| 3 (last) | `fresh` | No active reset window is known for this model yet | Save untouched quota for later if other timed pools exist |
 
 Within the same priority tier, the account with the most remaining quota for that model wins.
+
+Timer meanings:
+
+- `fresh` -- no future `resetTime` is currently reported for that model on that account. In practice, this means no active reset window is known yet.
+- `5h` -- `resetTime` is less than 6 hours away.
+- `7d` -- `resetTime` is 6 hours or more away.
 
 ### Rotation Triggers
 
@@ -140,32 +146,35 @@ Three mechanisms trigger rotation, scoped to the specific model:
 
 1. **Quota-based** (primary) -- Polls the Google quota API every 5 minutes. When a model's remaining quota drops by `rotateOnQuotaDrop` percentage points (default: 20%), that model rotates to the next account. Other models stay on their current accounts.
 
-2. **Request-count** (fallback) -- After `requestsPerRotation` requests (default: 5), all models on that account rotate. Safety net for when quota data isn't available yet.
+2. **Request-count** (fallback) -- After `requestsPerRotation` successful requests (default: 5), the rotator asks for a rotation on the model that served that request. By default this fallback is only used when quota data for that model is still unknown.
 
-3. **429 failover** (reactive) -- On rate limit or 5xx, the account is marked exhausted with a cooldown and the affected model immediately switches.
+3. **429 failover** (reactive) -- On rate limit, the account is marked exhausted with a parsed retry cooldown and the affected model immediately switches.
 
 ### Account Protection
 
 The proxy detects blocked/suspended accounts at three levels:
 
-1. **Quota API check** (on startup + every poll) -- If the quota API returns `403 PERMISSION_DENIED` with "violation of Terms of Service", the account is immediately flagged.
+1. **Quota API check** (initial poll + every poll) -- If the quota API returns `401` or `403`, the account is immediately flagged.
 
 2. **API 401** (on request) -- If the prod endpoint rejects the token with `401 UNAUTHENTICATED`, the account is flagged.
 
-3. **API 403** (on request) -- If the response body contains infringement keywords (`infring`, `suspend`, `abus`, `terminat`, `violat`, `banned`, `policy`, `forbidden`), the account is flagged.
+3. **API 403** (on request) -- If the response body contains enforcement keywords such as `infring`, `suspend`, `abus`, `terminat`, `violat`, `banned`, `policy`, `forbidden`, or `verif`, the account is flagged.
 
-Flagged accounts are **immediately excluded** from all model routing. The dashboard shows a red `FLAGGED` badge with the error message and quarantine guidance. Flagged accounts are intentionally kept out of rotation until the provider explicitly restores access.
+Flagged accounts are **immediately excluded** from all model routing. If the reason looks serious enough (for example ToS, abuse, infringement, suspension, or ban language), the rotator also enables a global **protective pause** that stops all routing for `protectivePauseMs` (default: 6 hours). The dashboard shows a red `FLAGGED` badge with the error message and quarantine guidance. Flagged accounts are intentionally kept out of rotation until the provider explicitly restores access.
 
 ### Cooldown Management
 
 - Cooldowns are capped at **30 minutes** max
 - Stale cooldowns from previous sessions are capped on startup
+- When every non-flagged account is cooling down, the routing state becomes `cooldown_wait`
 - The dashboard shows why routing is waiting, how long until the next retry window, and which accounts are cooling down
 - Quota-based rotation only triggers if a healthy account is available; the proxy won't rotate away from a working account if there's no better alternative
 
 ### Error Handling
 
 - **429** (rate limit) -- account is marked exhausted with cooldown, rotates to next
+- **401** -- account is flagged and excluded from routing
+- **403** with enforcement keywords -- account is flagged and may trigger protective pause
 - **503** (no capacity) -- returned directly to the agent when all healthy accounts are cooling down, busy, flagged, or disabled
 - **5xx** (other server errors) -- account error counter incremented, rotates to next
 
@@ -201,6 +210,9 @@ pi-antigravity-rotator start --config-dir /path/to/config
   "requestsPerRotation": 5,
   "rotateOnQuotaDrop": 20,
   "quotaPollIntervalMs": 300000,
+  "maxConcurrentRequestsPerAccount": 1,
+  "protectivePauseMs": 21600000,
+  "useRequestCountRotationWhenQuotaUnknownOnly": true,
   "accounts": [
     {
       "email": "user@gmail.com",
@@ -220,6 +232,9 @@ pi-antigravity-rotator start --config-dir /path/to/config
 | `requestsPerRotation` | `5` | Max requests before rotating (fallback trigger) |
 | `rotateOnQuotaDrop` | `20` | Rotate when a model's quota drops this many %. Set to `0` to disable |
 | `quotaPollIntervalMs` | `300000` | Quota poll interval in ms (5 minutes) |
+| `maxConcurrentRequestsPerAccount` | `1` | Max simultaneous requests allowed per account |
+| `protectivePauseMs` | `21600000` | Global routing pause after a serious provider enforcement signal |
+| `useRequestCountRotationWhenQuotaUnknownOnly` | `true` | Use request-count rotation only until quota telemetry exists for the request's model |
 
 ### Account Fields
 
@@ -265,7 +280,7 @@ WantedBy=multi-user.target
 ## Troubleshooting
 
 **Account shows `flagged` status**
-Google detected potential abuse. Review the error message on the dashboard. After resolving with Google, click Re-enable or `POST /api/enable/<email>`.
+Google detected potential abuse or enforcement. Review the error message on the dashboard and resolve the provider-side block first. Flagged accounts are quarantined and are not re-enabled through `/api/enable/<email>` until the underlying provider issue is cleared by replacing or restoring the account.
 
 **Account keeps getting disabled after 5 errors**
 Check the error message. Common causes: revoked OAuth consent, expired refresh token (re-run `npm run login`), or Google account suspension.
