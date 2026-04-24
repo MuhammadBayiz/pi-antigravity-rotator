@@ -86,6 +86,23 @@ function capCooldown(ms: number): number {
 	return Math.min(ms, MAX_COOLDOWN_MS);
 }
 
+function formatError(err: unknown): string {
+	if (!(err instanceof Error)) return String(err);
+	const cause = err.cause;
+	if (cause && typeof cause === "object") {
+		const code = "code" in cause ? String(cause.code) : null;
+		const message = "message" in cause ? String(cause.message) : null;
+		if (code || message) {
+			return `${err.name}: ${err.message} (${[code, message].filter(Boolean).join(": ")})`;
+		}
+	}
+	return `${err.name}: ${err.message}`;
+}
+
+function isFetchTransportError(err: unknown): boolean {
+	return err instanceof TypeError && err.message === "fetch failed";
+}
+
 /**
  * Read the full request body from an IncomingMessage.
  */
@@ -319,8 +336,11 @@ async function handleProxyRequest(
 				}
 				return;
 			} catch (err) {
-				proxyLog(`[${label}] Request failed: ${err}`, "error");
-				rotator.markError(account, err instanceof Error ? err.message : String(err));
+				const formattedError = formatError(err);
+				proxyLog(`[${label}] Request failed: ${formattedError}`, isFetchTransportError(err) ? "warn" : "error");
+				if (!isFetchTransportError(err)) {
+					rotator.markError(account, formattedError);
+				}
 			if (res.headersSent) {
 				res.end();
 				return;

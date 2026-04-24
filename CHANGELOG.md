@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.3.6] - 2026-04-24
+
+### Fixed
+- Treat Node `fetch failed` transport errors as transient upstream/network failures instead of account health errors, avoiding false account disables during stalled requests.
+
 ## [1.3.5] - 2026-04-24
 
 ### Fixed
