@@ -79,7 +79,7 @@ export class AccountRotator {
 					this.modelState.set(model, {
 						activeAccountIndex: Math.min(idx, this.accounts.length - 1),
 						quotaAtRotationStart: -1,
-						requestsOnActiveAccount: 0,
+						requestsOnActiveAccount: state.modelRequestCounts?.[model] ?? 0,
 					});
 				}
 			}
@@ -118,12 +118,15 @@ export class AccountRotator {
 
 	saveState(): void {
 		const modelAccounts: Record<string, number> = {};
+		const modelRequestCounts: Record<string, number> = {};
 		for (const [model, state] of this.modelState.entries()) {
 			modelAccounts[model] = state.activeAccountIndex;
+			modelRequestCounts[model] = state.requestsOnActiveAccount;
 		}
 
 		const state: PersistedState = {
 			modelAccounts,
+			modelRequestCounts,
 			currentIndex: this.defaultIndex,
 			protectivePauseUntil: this.protectivePauseUntil,
 			protectivePauseReason: this.protectivePauseReason,
@@ -375,6 +378,7 @@ export class AccountRotator {
 		const state = this.modelState.get(modelKey);
 		if (state) {
 			state.requestsOnActiveAccount++;
+			this.saveState();
 		}
 	}
 
@@ -423,10 +427,9 @@ export class AccountRotator {
 						return rotated;
 					}
 					this.log(
-						`${current.config.label || current.config.email} [${modelKey}]: threshold reached but no replacement is available, refusing request`,
+						`${current.config.label || current.config.email} [${modelKey}]: threshold reached but no replacement is available, staying on current account`,
 						"warn",
 					);
-					return null;
 				}
 				const quota = this.getModelQuota(current, modelKey);
 				if (quota === 0) {
@@ -582,8 +585,22 @@ export class AccountRotator {
 		account.consecutiveErrors = 0;
 		account.lastError = null;
 
+		const modelKey = model ? resolveQuotaModelKey(model) : null;
+		const state = modelKey ? this.modelState.get(modelKey) : null;
+		const shouldRotate =
+			!!modelKey &&
+			!!state &&
+			this.accounts[state.activeAccountIndex] === account &&
+			this.shouldUseRequestCountRotation(account, modelKey) &&
+			state.requestsOnActiveAccount >= this.config.requestsPerRotation;
+
 		this.saveState();
-		return false;
+		if (shouldRotate) {
+			this.log(
+				`${account.config.label || account.config.email} [${modelKey}]: hit rotation threshold (${state.requestsOnActiveAccount}/${this.config.requestsPerRotation})`,
+			);
+		}
+		return shouldRotate;
 	}
 
 	// Mark an account as exhausted (429 or quota exceeded)

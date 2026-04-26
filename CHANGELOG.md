@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [1.3.8] - 2026-04-26
+
+### Fixed
+- Persist per-model request-count rotation counters across restarts so configured request thresholds continue to work after service reloads.
+- Keep serving from the current healthy account when request-count rotation reaches its threshold but no replacement account is available, avoiding unnecessary `503` responses while usable quota remains.
+
 ## [1.3.7] - 2026-04-25
 
 ### Fixed

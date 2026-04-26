@@ -16,7 +16,7 @@ Multi-account rotation proxy for Google Antigravity. Distributes API usage acros
 - **Token auto-refresh** -- Tokens are refreshed automatically before expiry; no manual management
 - **Endpoint cascade** -- Tries daily, autopush, and prod API endpoints for resilience
 - **Web dashboard** -- Real-time view of model routing table, per-account quota bars with per-model timers, and flagged account alerts
-- **State persistence** -- Survives restarts; routing assignments, cooldowns, and flags are saved to disk
+- **State persistence** -- Survives restarts; routing assignments, per-model request counters, cooldowns, and flags are saved to disk
 
 ## Quick Start
 
@@ -148,7 +148,7 @@ Three mechanisms trigger rotation, scoped to the specific model:
 
 1. **Quota-based** (primary) -- Polls the Google quota API every 5 minutes. When a model's remaining quota drops by `rotateOnQuotaDrop` percentage points (default: 20%), that model rotates to the next account. Other models stay on their current accounts.
 
-2. **Request-count** (fallback) -- Before forwarding a request, the rotator checks how many requests the current account has already served for that specific model and rotates once it reaches `requestsPerRotation` (default: 5). By default this fallback is only used when quota data for that model is still unknown.
+2. **Request-count** (fallback) -- Before forwarding a request, the rotator checks how many requests the current account has already served for that specific model and rotates once it reaches `requestsPerRotation` (default: 5). Per-model counters are persisted so restarts do not reset the threshold. By default this fallback is only used when quota data for that model is still unknown; set `useRequestCountRotationWhenQuotaUnknownOnly` to `false` to keep request-count rotation active even when quota telemetry exists. If the threshold is reached but every replacement account is cooling down, flagged, disabled, busy, blocked by fresh-window policy, or out of quota for that model, the rotator stays on the current healthy account instead of returning `503`.
 
 3. **429 failover** (reactive) -- On rate limit, the account is marked exhausted with a parsed retry cooldown and the affected model immediately switches.
 
@@ -253,12 +253,12 @@ pi-antigravity-rotator start --config-dir /path/to/config
 | Field | Default | Description |
 |-------|---------|-------------|
 | `proxyPort` | `51200` | Port the proxy listens on |
-| `requestsPerRotation` | `5` | Max requests before rotating (fallback trigger) |
+| `requestsPerRotation` | `5` | Max per-model requests before attempting request-count rotation |
 | `rotateOnQuotaDrop` | `20` | Rotate when a model's quota drops this many %. Set to `0` to disable |
 | `quotaPollIntervalMs` | `300000` | Quota poll interval in ms (5 minutes) |
 | `maxConcurrentRequestsPerAccount` | `1` | Max simultaneous requests allowed per account |
 | `protectivePauseMs` | `21600000` | Global routing pause after a serious provider enforcement signal |
-| `useRequestCountRotationWhenQuotaUnknownOnly` | `true` | Use request-count rotation only until quota telemetry exists for the request's model |
+| `useRequestCountRotationWhenQuotaUnknownOnly` | `true` | Use request-count rotation only until quota telemetry exists for the request's model. Set to `false` to keep rotating by request count even with known quotas |
 
 ### Account Fields
 

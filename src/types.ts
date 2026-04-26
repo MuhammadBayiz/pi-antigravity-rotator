@@ -125,6 +125,8 @@ export interface ModelRotationState {
 export interface PersistedState {
 	// Per-model active account index
 	modelAccounts: Record<string, number>;
+	// Per-model request count on the active account
+	modelRequestCounts?: Record<string, number>;
 	// Legacy fallback
 	currentIndex?: number;
 	protectivePauseUntil?: number;
