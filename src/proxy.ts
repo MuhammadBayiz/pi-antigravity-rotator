@@ -2,7 +2,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { Readable } from "node:stream";
-import { ANTIGRAVITY_ENDPOINTS } from "./types.js";
+import { ANTIGRAVITY_ENDPOINTS, resolveQuotaModelKey } from "./types.js";
 import type { AccountRuntime } from "./types.js";
 import type { AccountRotator } from "./rotator.js";
 import {
@@ -11,6 +11,7 @@ import {
 	serveEnableApi,
 	serveFreshWindowStartsApi,
 	serveAccountFreshWindowStartsApi,
+	serveClearInFlightApi,
 } from "./dashboard.js";
 import { handleHostedCallback, serveLoginLanding, startHostedLogin } from "./onboarding.js";
 
@@ -304,7 +305,7 @@ async function handleProxyRequest(
 	const rotateAndRelease = async (): Promise<AccountRuntime | null> => {
 		const nextAccount = await rotator.rotateToNext(body.model);
 		if (nextAccount) {
-			rotator.finishRequest(nextAccount);
+			rotator.finishRequest(nextAccount, resolveQuotaModelKey(body.model) ?? undefined);
 		}
 		return nextAccount;
 	};
@@ -327,12 +328,17 @@ async function handleProxyRequest(
 				const cooldownMs = capCooldown(extractRetryDelay(errorText, response.headers));
 				proxyLog(`[${label}] 429 rate limited, cooldown ${Math.ceil(cooldownMs / 1000)}s`, "warn");
 				rotator.markExhausted(account, cooldownMs);
-				const nextAccount = await rotateAndRelease();
-				if (!nextAccount) {
-					sendNoAccountsAvailable(`all candidate accounts are cooling down after ${label} was rate limited`);
-					return;
-				}
-				continue;
+				res.writeHead(503, {
+					"Content-Type": "application/json",
+					"Retry-After": String(Math.ceil(cooldownMs / 1000)),
+				});
+				res.end(JSON.stringify({
+					error: "Rate limited",
+					reason: `${label} was rate limited; not retrying another account for this request`,
+					model: body.model,
+					retryAfterMs: cooldownMs,
+				}));
+				return;
 			}
 
 				if (response.status === 401) {
@@ -427,7 +433,7 @@ async function handleProxyRequest(
 			}
 			continue;
 		} finally {
-			rotator.finishRequest(account);
+			rotator.finishRequest(account, resolveQuotaModelKey(body.model) ?? undefined);
 		}
 	}
 
@@ -487,6 +493,15 @@ export function startProxy(rotator: AccountRotator, port: number): void {
 		if (method === "POST" && url.startsWith("/api/enable/")) {
 			const email = decodeURIComponent(url.slice("/api/enable/".length));
 			serveEnableApi(res, rotator, email);
+			return;
+		}
+
+		if (method === "POST" && url.startsWith("/api/clear-inflight/")) {
+			const rest = url.slice("/api/clear-inflight/".length);
+			const firstSlash = rest.indexOf("/");
+			const email = decodeURIComponent(firstSlash >= 0 ? rest.slice(0, firstSlash) : rest);
+			const modelKey = firstSlash >= 0 ? decodeURIComponent(rest.slice(firstSlash + 1)) : undefined;
+			serveClearInFlightApi(res, rotator, email, modelKey);
 			return;
 		}
 

@@ -39,6 +39,12 @@ export function serveAccountFreshWindowStartsApi(
 	res.end(JSON.stringify({ ok, email, allowFreshWindowStartsOverride: enabled }));
 }
 
+export function serveClearInFlightApi(res: ServerResponse, rotator: AccountRotator, email: string, modelKey?: string): void {
+	const ok = rotator.clearInFlightRequests(email, modelKey);
+	res.writeHead(ok ? 200 : 404, { "Content-Type": "application/json" });
+	res.end(JSON.stringify({ ok, email, modelKey }));
+}
+
 const DASHBOARD_HTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -410,6 +416,33 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     width: 55px;
     text-align: right;
     flex-shrink: 0;
+  }
+
+  .quota-action {
+    width: 54px;
+    flex-shrink: 0;
+  }
+
+  .btn-clear-flight {
+    width: 54px;
+    border: 1px solid rgba(96, 165, 250, 0.28);
+    background: rgba(96, 165, 250, 0.08);
+    color: var(--blue);
+    border-radius: 4px;
+    font-size: 9px;
+    font-family: var(--font);
+    font-weight: 700;
+    padding: 2px 4px;
+    cursor: pointer;
+  }
+
+  .btn-clear-flight:hover { background: rgba(96, 165, 250, 0.16); }
+  .btn-clear-flight:disabled {
+    border-color: var(--border);
+    background: rgba(255,255,255,0.03);
+    color: var(--text-dim);
+    cursor: not-allowed;
+    opacity: 0.55;
   }
 
   .pulse { animation: pulse 2s ease-in-out infinite; }
@@ -851,9 +884,14 @@ function timerDisplayLabel(timerType) {
   return timerType === 'fresh' ? 'idle' : timerType;
 }
 
-function renderQuotaBars(quota) {
+function renderQuotaBars(account) {
+  var quota = account.quota;
   if (!quota || quota.length === 0) return '';
   var rows = quota.map(function(q) {
+    var inFlightForModel = (account.inFlightByModel || {})[q.modelKey] || 0;
+    var clearButton = inFlightForModel > 0
+      ? '<button class="btn-clear-flight" title="Clear in-flight counter for ' + q.displayName + '" onclick="clearInFlight(\\'' + account.email + '\\', \\'' + q.modelKey + '\\')">Clear</button>'
+      : '<button class="btn-clear-flight" title="No in-flight requests for ' + q.displayName + '" disabled>Clear</button>';
     var color = quotaBarColor(q.percentRemaining);
     var timerClass = 'timer-' + q.timerType;
     var resetLabel = '';
@@ -867,6 +905,7 @@ function renderQuotaBars(quota) {
       '<div class="quota-bar-bg"><div class="quota-bar-fill" style="width:' + q.percentRemaining + '%;background:' + color + '"></div></div>' +
       '<span class="quota-pct" style="color:' + color + '">' + q.percentRemaining + '%</span>' +
       '<span class="quota-reset">' + (resetLabel || '--') + '</span>' +
+      '<span class="quota-action">' + clearButton + '</span>' +
     '</div>';
   }).join('');
   return '<div class="quota-section"><div class="quota-section-title">Quota (per model)</div>' + rows + '</div>';
@@ -967,7 +1006,7 @@ function renderAccounts(data) {
         '</div>' +
       '</div>' +
       '<div class="card-email">' + maskEmail(a.email) + '</div>' +
-      (a.quota && a.quota.length > 0 ? renderQuotaBars(a.quota) : '') +
+      (a.quota && a.quota.length > 0 ? renderQuotaBars(a) : '') +
       '<div class="card-stats">' +
         '<div class="card-stat"><div class="stat-label">Requests</div><div class="stat-value">' +
           a.requestsSinceRotation + ' / ' + a.totalRequests + ' total</div></div>' +
@@ -1160,6 +1199,12 @@ async function setFreshWindowStarts(enabled) {
 
 async function setAccountFreshWindowOverride(email, enabled) {
   await fetch('/api/account-fresh-window-starts/' + encodeURIComponent(email) + '/' + (enabled ? 'on' : 'off'), { method: 'POST' });
+  refresh();
+}
+
+async function clearInFlight(email, modelKey) {
+  if (!confirm('Clear in-flight counter for this account/model? Use only when you are sure the request is stuck.')) return;
+  await fetch('/api/clear-inflight/' + encodeURIComponent(email) + '/' + encodeURIComponent(modelKey), { method: 'POST' });
   refresh();
 }
 

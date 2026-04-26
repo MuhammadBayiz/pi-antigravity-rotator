@@ -62,6 +62,7 @@ export class AccountRotator {
 			disabled: false,
 			flagged: false,
 			inFlightRequests: 0,
+			inFlightByModel: {},
 			allowFreshWindowStartsOverride: false,
 		}));
 	}
@@ -201,7 +202,7 @@ export class AccountRotator {
 					if (drop >= this.config.rotateOnQuotaDrop) {
 						// Only rotate if there's a healthy account to rotate to
 						const hasHealthy = this.accounts.some(
-							(a, idx) => idx !== mState.activeAccountIndex && this.isAvailable(a, Date.now()),
+							(a, idx) => idx !== mState.activeAccountIndex && this.isRoutableForModel(a, modelKey, Date.now()),
 						);
 						if (hasHealthy) {
 							this.log(
@@ -331,7 +332,7 @@ export class AccountRotator {
 	private hasTimedCandidate(modelKey: string, now: number, excludeIdx: number = -1): boolean {
 		return this.accounts.some((account, idx) => {
 			if (idx === excludeIdx) return false;
-			if (!this.isAvailable(account, now)) return false;
+			if (!this.isAvailableForModel(account, modelKey, now)) return false;
 			if (this.getModelQuota(account, modelKey) === 0) return false;
 			return this.isTimedWindow(account, modelKey);
 		});
@@ -346,7 +347,7 @@ export class AccountRotator {
 		for (let i = 0; i < this.accounts.length; i++) {
 			if (i === excludeIdx) continue;
 			const account = this.accounts[i];
-			if (!this.isAvailable(account, now)) continue;
+			if (!this.isAvailableForModel(account, modelKey, now)) continue;
 
 			const quota = this.getModelQuota(account, modelKey);
 			if (quota === 0) continue;
@@ -409,7 +410,7 @@ export class AccountRotator {
 		const idx = state?.activeAccountIndex ?? this.defaultIndex;
 
 		const current = this.accounts[idx];
-		if (current && this.isAvailable(current, now)) {
+		if (current && (!modelKey ? this.isAvailable(current, now) : this.isAvailableForModel(current, modelKey, now))) {
 			// Check if this account has quota for the requested model
 			if (modelKey) {
 				if (this.shouldRotateBeforeRequest(current, modelKey, state ?? null)) {
@@ -422,9 +423,10 @@ export class AccountRotator {
 						return rotated;
 					}
 					this.log(
-						`${current.config.label || current.config.email} [${modelKey}]: threshold reached but no replacement is available, staying`,
+						`${current.config.label || current.config.email} [${modelKey}]: threshold reached but no replacement is available, refusing request`,
 						"warn",
 					);
+					return null;
 				}
 				const quota = this.getModelQuota(current, modelKey);
 				if (quota === 0) {
@@ -444,13 +446,13 @@ export class AccountRotator {
 					return this.rotateModelForRequest(modelKey);
 				}
 			}
-			this.startRequest(current);
+			this.startRequest(current, modelKey ?? undefined);
 			try {
 				await this.ensureValidToken(current);
 				if (modelKey) this.countModelAssignment(modelKey);
 				return current;
 			} catch (err) {
-				this.finishRequest(current);
+				this.finishRequest(current, modelKey ?? undefined);
 				throw err;
 			}
 		}
@@ -483,19 +485,19 @@ export class AccountRotator {
 				`[${modelKey}] Rotated to ${best.config.label || best.config.email} [${timerType}] (quota: ${quota >= 0 ? quota + "%" : "unknown"})`,
 			);
 			this.saveState();
-			this.startRequest(best);
+			this.startRequest(best, modelKey);
 			try {
 				await this.ensureValidToken(best);
 				return best;
 			} catch (err) {
-				this.finishRequest(best);
+				this.finishRequest(best, modelKey);
 				throw err;
 			}
 		}
 
-		if (!this.allowFreshWindowStarts && this.accounts.some((account, idx) => {
-			if (idx === excludeIdx) return false;
-			if (!this.isAvailable(account, now)) return false;
+			if (!this.allowFreshWindowStarts && this.accounts.some((account, idx) => {
+				if (idx === excludeIdx) return false;
+				if (!this.isAvailableForModel(account, modelKey, now)) return false;
 			if (this.getModelQuota(account, modelKey) === 0) return false;
 			return this.getModelTimerType(account, modelKey) === "fresh";
 		})) {
@@ -652,6 +654,23 @@ export class AccountRotator {
 		return true;
 	}
 
+	clearInFlightRequests(email: string, modelKey?: string): boolean {
+		const account = this.accounts.find((a) => a.config.email === email);
+		if (!account) return false;
+		if (modelKey) {
+			const previous = account.inFlightByModel[modelKey] ?? 0;
+			account.inFlightByModel[modelKey] = 0;
+			this.recalculateInFlightRequests(account);
+			this.log(`${email}: operator cleared ${previous} in-flight request(s) for ${modelKey}`, "warn");
+			return true;
+		}
+		const previous = account.inFlightRequests;
+		account.inFlightRequests = 0;
+		account.inFlightByModel = {};
+		this.log(`${email}: operator cleared ${previous} in-flight request(s)`, "warn");
+		return true;
+	}
+
 	async ensureValidToken(account: AccountRuntime): Promise<void> {
 		const now = Date.now();
 		if (account.accessToken && account.tokenExpires > now) {
@@ -702,7 +721,12 @@ export class AccountRotator {
 		if (account.disabled) return false;
 		if (account.flagged) return false;
 		if (account.cooldownUntil > now) return false;
-		if (account.inFlightRequests >= (this.config.maxConcurrentRequestsPerAccount ?? 1)) return false;
+		return true;
+	}
+
+	private isAvailableForModel(account: AccountRuntime, modelKey: string, now: number): boolean {
+		if (!this.isAvailable(account, now)) return false;
+		if ((account.inFlightByModel[modelKey] ?? 0) >= (this.config.maxConcurrentRequestsPerAccount ?? 1)) return false;
 		return true;
 	}
 
@@ -711,6 +735,7 @@ export class AccountRotator {
 			account.flagged = true;
 			account.lastError = reason;
 			account.inFlightRequests = 0;
+			account.inFlightByModel = {};
 			this.log(`${account.config.email}: FLAGGED - ${reason}`, "error");
 			if (this.shouldTriggerProtectivePause(reason)) {
 				this.protectivePauseUntil = Date.now() + (this.config.protectivePauseMs ?? 6 * 60 * 60 * 1000);
@@ -723,22 +748,38 @@ export class AccountRotator {
 		this.saveState();
 	}
 
-	startRequest(account: AccountRuntime): void {
-		account.inFlightRequests++;
+	startRequest(account: AccountRuntime, modelKey?: string): void {
+		const key = modelKey ?? "__default__";
+		account.inFlightByModel[key] = (account.inFlightByModel[key] ?? 0) + 1;
+		this.recalculateInFlightRequests(account);
 	}
 
-	finishRequest(account: AccountRuntime): void {
-		account.inFlightRequests = Math.max(0, account.inFlightRequests - 1);
+	finishRequest(account: AccountRuntime, modelKey?: string): void {
+		const key = modelKey ?? "__default__";
+		account.inFlightByModel[key] = Math.max(0, (account.inFlightByModel[key] ?? 0) - 1);
+		if (account.inFlightByModel[key] === 0) delete account.inFlightByModel[key];
+		this.recalculateInFlightRequests(account);
+	}
+
+	private recalculateInFlightRequests(account: AccountRuntime): void {
+		account.inFlightRequests = Object.values(account.inFlightByModel).reduce((sum, count) => sum + count, 0);
+	}
+
+	private isRoutableForModel(account: AccountRuntime, modelKey: string, now: number): boolean {
+		if (!this.isAvailableForModel(account, modelKey, now)) return false;
+		if (this.getModelQuota(account, modelKey) === 0) return false;
+		if (!this.isFreshWindowAllowed(account, modelKey)) return false;
+		return true;
 	}
 
 	getStatus(): StatusResponse {
 		const now = Date.now();
 
-		// Build per-model active account map
+		// Build per-model active account map from accounts that can actually serve now.
 		const activeAccounts: Record<string, string> = {};
 		for (const [model, mState] of this.modelState.entries()) {
 			const account = this.accounts[mState.activeAccountIndex];
-			if (account) {
+			if (account && this.isRoutableForModel(account, model, now)) {
 				activeAccounts[model] = account.config.email;
 			}
 		}
@@ -747,7 +788,7 @@ export class AccountRotator {
 			// Determine which models this account is active for
 			const activeForModels: string[] = [];
 			for (const [model, mState] of this.modelState.entries()) {
-				if (this.accounts[mState.activeAccountIndex] === a) {
+				if (this.accounts[mState.activeAccountIndex] === a && this.isRoutableForModel(a, model, now)) {
 					activeForModels.push(model);
 				}
 			}
@@ -778,11 +819,12 @@ export class AccountRotator {
 				cooldownRemaining: Math.max(0, a.cooldownUntil - now),
 				lastUsed: a.lastUsed,
 				lastError: a.lastError,
-				consecutiveErrors: a.consecutiveErrors,
-				hasValidToken: !!(a.accessToken && a.tokenExpires > now),
-				quota: a.quota,
-				inFlightRequests: a.inFlightRequests,
-				proDetected: this.isProAccount(a),
+					consecutiveErrors: a.consecutiveErrors,
+					hasValidToken: !!(a.accessToken && a.tokenExpires > now),
+					quota: a.quota,
+					inFlightRequests: a.inFlightRequests,
+					inFlightByModel: a.inFlightByModel,
+					proDetected: this.isProAccount(a),
 				familyManager: !!a.config.familyManager,
 				allowFreshWindowStartsOverride: a.allowFreshWindowStartsOverride,
 				effectiveFreshWindowStartsAllowed: this.isEffectiveFreshWindowAllowed(a),
@@ -842,8 +884,9 @@ export class AccountRotator {
 				lastError: null,
 				consecutiveErrors: 0,
 				disabled: false,
-				flagged: false,
-				inFlightRequests: 0,
+					flagged: false,
+					inFlightRequests: 0,
+					inFlightByModel: {},
 				allowFreshWindowStartsOverride: false,
 			};
 			this.accounts.push(runtime);

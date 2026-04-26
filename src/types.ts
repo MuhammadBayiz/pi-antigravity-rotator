@@ -110,6 +110,7 @@ export interface AccountRuntime {
 	disabled: boolean; // permanently disabled (revoked token, etc.)
 	flagged: boolean; // flagged for infringement/abuse by Google
 	inFlightRequests: number;
+	inFlightByModel: Record<string, number>;
 	allowFreshWindowStartsOverride: boolean;
 }
 
@@ -195,6 +196,7 @@ export interface AccountStatus {
 	hasValidToken: boolean;
 	quota: ModelQuota[];
 	inFlightRequests: number;
+	inFlightByModel: Record<string, number>;
 	// Pro family sharing
 	proDetected: boolean;
 	familyManager: boolean;
