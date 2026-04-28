@@ -1369,143 +1369,68 @@ export class AccountRotator {
 		const currentProCount = proAccounts.length;
 		const actions: ProAdvisorAction[] = [];
 
-		// Suggest "remove-pro" for Pro accounts (not family manager) with 0% on all advisor models
-		// BUT only if the 7d timer is NOT a Pro-originated cooldown (those should stay in Pro family)
-		for (const account of proAccounts) {
-			if (account.config.familyManager) continue;
-			const advisorQuotas = account.quota.filter((q) =>
-				AccountRotator.PRO_ADVISOR_MODELS.some((m) => q.modelKey.includes(m) || m.includes(q.modelKey)),
-			);
-			if (advisorQuotas.length === 0) continue;
-			const allExhausted = advisorQuotas.every((q) => q.percentRemaining === 0);
-			if (!allExhausted) continue;
+		// Comparative Quota Analysis Logic
+		for (const account of this.accounts) {
+			if (account.disabled || account.flagged) continue;
 
-			// Check if any advisor model has a Pro-originated 7d timer (still in Pro cooldown)
-			const hasProCooldown = AccountRotator.PRO_ADVISOR_MODELS.some((m) =>
-				this.isProOriginatedTimer(account, m),
-			);
+			// Find max known quota for both tiers across all advisor models
+			let maxProQuota = -1;
+			let maxFreeQuota = -1;
 
-			if (hasProCooldown) {
-				// Don't remove — it's in Pro cooldown. Find the soonest reset.
-				let soonestResetLabel = "";
-				for (const m of AccountRotator.PRO_ADVISOR_MODELS) {
-					const h = account.quotaWindows[m];
-					if (h && h.pro.resetTimeMs > Date.now()) {
-						const ms = h.pro.resetTimeMs - Date.now();
-						soonestResetLabel = `${Math.floor(ms / 3600000)}h${Math.floor((ms % 3600000) / 60000)}m`;
-						break;
-					}
-				}
-				// Inform but don't action
-				actions.push({
-					type: "remove-pro",
-					email: account.config.email,
-					label: account.config.label || account.config.email,
-					reason: `Pro 0% but in Pro cooldown (7d timer is Pro-originated)${soonestResetLabel ? `, resets in ${soonestResetLabel}` : ""}. Keep in Pro family.`,
-				});
-			} else {
-				// Truly exhausted with no Pro cooldown — safe to remove
-				actions.push({
-					type: "remove-pro",
-					email: account.config.email,
-					label: account.config.label || account.config.email,
-					reason: "Pro quota exhausted, no Pro cooldown active — safe to remove from Pro family",
-				});
+			for (const modelKey of AccountRotator.PRO_ADVISOR_MODELS) {
+				const tracker = account.quotaWindows[modelKey];
+				if (!tracker) continue;
+				if (tracker.pro.lastSeen > 0) maxProQuota = Math.max(maxProQuota, tracker.pro.lastQuota);
+				if (tracker.free.lastSeen > 0) maxFreeQuota = Math.max(maxFreeQuota, tracker.free.lastQuota);
 			}
-		}
 
-		// Suggest "add-pro" for accounts where Pro window has quota available (or reset passed)
-		const slotsAvailable = maxSlots - currentProCount + actions.filter((a) => a.type === "remove-pro").length;
-		if (slotsAvailable > 0) {
-			const candidates: { account: AccountRuntime; priority: number; reason: string }[] = [];
-			const now = Date.now();
+			// If a tier has no data (-1), assume 0 for comparison purposes
+			const effectivePro = Math.max(0, maxProQuota);
+			const effectiveFree = Math.max(0, maxFreeQuota);
 
-			for (const account of this.accounts) {
-				if (account.disabled || account.flagged) continue;
-				if (this.isProAccount(account)) continue;
-				// Skip if already recommended for removal above
-				if (candidates.some((c) => c.account === account)) continue;
+			const isCurrentlyPro = this.isProAccount(account);
 
-				for (const modelKey of AccountRotator.PRO_ADVISOR_MODELS) {
-					const alt = this.getAlternateWindow(account, modelKey);
-					if (!alt || alt.type !== "pro") continue;
+			if (isCurrentlyPro) {
+				// Account is currently in PRO tier
+				if (account.config.familyManager) continue; // Never remove FM
 
-					if (alt.resetTimeMs > 0 && alt.resetTimeMs <= now) {
-						// Pro reset has passed — fresh Pro tokens likely available
-						const agoMs = now - alt.resetTimeMs;
-						const agoH = Math.floor(agoMs / 3600000);
-						const agoM = Math.floor((agoMs % 3600000) / 60000);
-						candidates.push({
-							account,
-							priority: 0, // highest: reset already passed
-							reason: `Pro reset on ${modelKey} passed ${agoH}h${agoM}m ago — fresh Pro tokens available`,
-						});
-						break;
-					}
-
-					if (alt.quota > 0) {
-						// Pro window still has quota remaining
-						candidates.push({
-							account,
-							priority: 1, // high: has existing Pro quota
-							reason: `Pro window on ${modelKey} has ${alt.quota}% remaining`,
-						});
-						break;
-					}
-
-					if (alt.resetTimeMs > now) {
-						// Pro reset is upcoming
-						const untilMs = alt.resetTimeMs - now;
-						const untilH = Math.floor(untilMs / 3600000);
-						const untilM = Math.floor((untilMs % 3600000) / 60000);
-						candidates.push({
-							account,
-							priority: 2 + untilMs / 86400000, // lower priority the further away
-							reason: `Pro on ${modelKey} resets in ${untilH}h${untilM}m`,
-						});
-						break;
-					}
+				if (effectiveFree > effectivePro) {
+					actions.push({
+						type: "remove-pro",
+						email: account.config.email,
+						label: account.config.label || account.config.email,
+						reason: `Free tier has more quota (${effectiveFree}%) than Pro tier (${effectivePro}%). Downgrade to use Free tokens.`,
+					});
+				} else if (effectivePro === 0 && effectiveFree === 0) {
+					// Both empty. Check if there's a soonest reset to inform.
+					actions.push({
+						type: "remove-pro",
+						email: account.config.email,
+						label: account.config.label || account.config.email,
+						reason: `All quota exhausted (0%). Safe to remove from Pro family to free up a slot.`,
+					});
 				}
-
-				// Also check: currently Free, and Free quota is low — suggest switching to Pro
-				const advisorQuotas = account.quota.filter((q) =>
-					AccountRotator.PRO_ADVISOR_MODELS.some((m) => q.modelKey.includes(m) || m.includes(q.modelKey)),
-				);
-				if (advisorQuotas.length === 0) continue;
-				if (candidates.some((c) => c.account === account)) continue;
-
-				const hasExhausted = advisorQuotas.some((q) => q.percentRemaining === 0);
-				if (!hasExhausted) continue;
-
-				let maxResetMs = 0;
-				for (const q of advisorQuotas) {
-					if (q.percentRemaining === 0 && q.resetTime) {
-						const resetMs = new Date(q.resetTime).getTime() - now;
-						if (resetMs > maxResetMs) maxResetMs = resetMs;
-					}
-				}
-
-				if (maxResetMs > 24 * 3600000) {
-					candidates.push({
-						account,
-						priority: 10 + maxResetMs / 86400000,
-						reason: `Free 0%, resets in ${Math.floor(maxResetMs / 86400000)}d ${Math.floor((maxResetMs % 86400000) / 3600000)}h`,
+			} else {
+				// Account is currently in FREE tier
+				if (effectivePro > effectiveFree) {
+					actions.push({
+						type: "add-pro",
+						email: account.config.email,
+						label: account.config.label || account.config.email,
+						reason: `Pro tier has more quota (${effectivePro}%) than Free tier (${effectiveFree}%). Upgrade to use Pro tokens.`,
 					});
 				}
 			}
-
-			// Sort by priority (lowest = most urgent)
-			candidates.sort((a, b) => a.priority - b.priority);
-
-			for (const { account, reason } of candidates.slice(0, slotsAvailable)) {
-				actions.push({
-					type: "add-pro",
-					email: account.config.email,
-					label: account.config.label || account.config.email,
-					reason,
-				});
-			}
 		}
+
+		// Sort add-pro actions by highest Pro quota difference
+		actions.sort((a, b) => {
+			if (a.type === "add-pro" && b.type === "add-pro") {
+				// We don't have the exact diff here anymore, but keeping them clustered is fine
+				return 0;
+			}
+			return 0;
+		});
 
 		return { currentProCount, maxProSlots: maxSlots, actions };
 	}
