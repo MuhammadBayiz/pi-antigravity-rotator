@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [1.4.8] - 2026-04-28
+
+### Fixed
+- **Dual-Window Cross Contamination**: Fixed an edge case where switching an account back to Free tier would mistakenly classify its new Free 7d timer as a Pro 7d cooldown due to a loose time tolerance and overly aggressive cross-model correlation.
+- Reduced dual-window reset time matching tolerance from 1 hour to 5 minutes to prevent identical fallback timer assignments.
+
 ## [1.4.7] - 2026-04-28
 
 ### Added

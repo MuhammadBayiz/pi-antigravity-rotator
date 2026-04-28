@@ -328,21 +328,24 @@ export class AccountRotator {
 					tracker.pro.lastQuota = q.percentRemaining;
 				} else if (q.timerType === "7d") {
 					// Determine: is this Pro 7d or Free 7d?
+					// Use tight 5-minute tolerance for matching known Pro windows
+					const resetMatchesPro = tracker.pro.resetTimeMs > 0 && Math.abs(currentResetMs - tracker.pro.resetTimeMs) < 300000;
+					// Check if account clearly still has Pro active on another model
+					const anyModelIs5h = account.quota.some((mq) => mq.timerType === "5h");
+					
 					const recentlyWas5h = tracker.pro.lastSeenAs5h > 0 && (now - tracker.pro.lastSeenAs5h) < SIX_HOURS_MS;
-					const resetMatchesPro = tracker.pro.resetTimeMs > 0 && Math.abs(currentResetMs - tracker.pro.resetTimeMs) < ONE_HOUR_MS;
 
-					if (recentlyWas5h && !resetMatchesPro) {
-						// Just transitioned from 5h to 7d (resetTime changed) — this is Pro 7d
+					if (resetMatchesPro || anyModelIs5h) {
+						// Either it explicitly matches the recorded Pro 7d, OR
+						// another model is 5h right now, so this 7d MUST be Pro.
+						// If the resetTime changed but it's Pro, update the recorded resetTime.
 						tracker.pro.lastSeen = now;
 						tracker.pro.resetTimeMs = currentResetMs;
 						tracker.pro.resetTime = q.resetTime;
 						tracker.pro.lastQuota = q.percentRemaining;
-					} else if (resetMatchesPro) {
-						// Same Pro 7d timer we've been tracking
-						tracker.pro.lastSeen = now;
-						tracker.pro.lastQuota = q.percentRemaining;
 					} else {
-						// Different resetTime — this is Free 7d
+						// Not an active Pro session, and resetTime doesn't match Pro history.
+						// This is a Free 7d timer.
 						tracker.free.lastSeen = now;
 						tracker.free.resetTimeMs = currentResetMs;
 						tracker.free.resetTime = q.resetTime;
@@ -352,23 +355,7 @@ export class AccountRotator {
 				// fresh: no timer active, don't update either window
 			}
 
-			// Cross-model Pro correlation: if ANY model shows 5h, the entire account is Pro.
-			// So any other model showing 7d right now is actually a Pro 7d, not Free.
-			const anyModelIs5h = account.quota.some((q) => q.timerType === "5h");
-			if (anyModelIs5h) {
-				for (const q of account.quota) {
-					if (q.timerType === "7d") {
-						const tracker = account.quotaWindows[q.modelKey];
-						if (tracker) {
-							const currentResetMs = q.resetTime ? new Date(q.resetTime).getTime() : 0;
-							tracker.pro.lastSeen = now;
-							tracker.pro.resetTimeMs = currentResetMs;
-							tracker.pro.resetTime = q.resetTime;
-							tracker.pro.lastQuota = q.percentRemaining;
-						}
-					}
-				}
-			}
+			// Cross-model Pro correlation is now handled directly in the loop above via anyModelIs5h check.
 		} catch {
 			// Network error, skip
 		}
@@ -1304,9 +1291,19 @@ export class AccountRotator {
 			(q) => q.modelKey.includes(modelKey) || modelKey.includes(q.modelKey),
 		);
 		if (!currentQuota || currentQuota.timerType !== "7d") return false;
+		
 		const currentResetMs = currentQuota.resetTime ? new Date(currentQuota.resetTime).getTime() : 0;
-		// Match if current resetTime is within 1h of recorded Pro resetTime
-		return tracker.pro.resetTimeMs > 0 && Math.abs(currentResetMs - tracker.pro.resetTimeMs) < 3600000;
+		if (tracker.pro.resetTimeMs === 0 || currentResetMs === 0) return false;
+
+		// Tight tolerance: 5 minutes instead of 1 hour
+		const matchesRecordedPro = Math.abs(currentResetMs - tracker.pro.resetTimeMs) < 300000;
+
+		// Also verify the entire account isn't clearly falling back to Free.
+		// If ANY model on this account currently has a 5h timer, we are definitively in Pro mode.
+		// If NO models have a 5h timer, we must rely strictly on the resetTime matching.
+		const anyModelIs5h = account.quota.some((q) => q.timerType === "5h");
+		
+		return matchesRecordedPro || (anyModelIs5h && (Date.now() - tracker.pro.lastSeen) < 12 * 3600000);
 	}
 
 	/**
