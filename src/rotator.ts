@@ -330,21 +330,18 @@ export class AccountRotator {
 					// Determine: is this Pro 7d or Free 7d?
 					// Use tight 5-minute tolerance for matching known Pro windows
 					const resetMatchesPro = tracker.pro.resetTimeMs > 0 && Math.abs(currentResetMs - tracker.pro.resetTimeMs) < 300000;
-					// Check if account clearly still has Pro active on another model
-					const anyModelIs5h = account.quota.some((mq) => mq.timerType === "5h");
 					
 					const recentlyWas5h = tracker.pro.lastSeenAs5h > 0 && (now - tracker.pro.lastSeenAs5h) < SIX_HOURS_MS;
 
-					if (resetMatchesPro || anyModelIs5h) {
-						// Either it explicitly matches the recorded Pro 7d, OR
-						// another model is 5h right now, so this 7d MUST be Pro.
-						// If the resetTime changed but it's Pro, update the recorded resetTime.
+					// A 7d timer is ONLY Pro if it strictly matches a known Pro reset time, 
+					// or if this specific model just transitioned out of a 5h timer.
+					// We DO NOT use cross-model correlation here to avoid dragging Free 7d timers into Pro memory.
+					if (resetMatchesPro || (recentlyWas5h && tracker.pro.resetTimeMs !== currentResetMs)) {
 						tracker.pro.lastSeen = now;
 						tracker.pro.resetTimeMs = currentResetMs;
 						tracker.pro.resetTime = q.resetTime;
 						tracker.pro.lastQuota = q.percentRemaining;
 					} else {
-						// Not an active Pro session, and resetTime doesn't match Pro history.
 						// This is a Free 7d timer.
 						tracker.free.lastSeen = now;
 						tracker.free.resetTimeMs = currentResetMs;
@@ -1300,10 +1297,17 @@ export class AccountRotator {
 
 		// Also verify the entire account isn't clearly falling back to Free.
 		// If ANY model on this account currently has a 5h timer, we are definitively in Pro mode.
-		// If NO models have a 5h timer, we must rely strictly on the resetTime matching.
+		// HOWEVER, we only consider THIS model's 7d timer as "Pro Originated" if it matches
+		// the recorded Pro resetTime.
 		const anyModelIs5h = account.quota.some((q) => q.timerType === "5h");
 		
-		return matchesRecordedPro || (anyModelIs5h && (Date.now() - tracker.pro.lastSeen) < 12 * 3600000);
+		// If another model is 5h, but THIS model's 7d timer doesn't match our recorded Pro reset,
+		// then this 7d timer is just the Free timer dragging along.
+		if (anyModelIs5h && !matchesRecordedPro) {
+			return false;
+		}
+
+		return matchesRecordedPro;
 	}
 
 	/**
