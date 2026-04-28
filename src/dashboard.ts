@@ -982,7 +982,7 @@ function formatDuration(ms) {
   var h = Math.floor(m / 60);
   if (h < 24) return h + 'h ' + (m % 60) + 'm';
   var d = Math.floor(h / 24);
-  return d + 'd ' + (h % 24) + 'h';
+  return d + 'd ' + (h % 24) + 'h ' + (m % 60) + 'm';
 }
 
 function formatTime(ts) {
