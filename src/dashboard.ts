@@ -835,10 +835,13 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 <div class="routing-panel state-stopped" id="routingHealth"></div>
 
 <div class="routing-panel" id="tokenUsagePanel" style="margin-top:12px">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-    <strong>Token Usage</strong>
-    <div style="display:flex;gap:6px;align-items:center">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+    <strong style="min-width:max-content">Token Usage</strong>
+    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
       <div id="tokenTotals" style="font-family:JetBrains Mono,monospace;font-size:0.85rem;color:var(--text-dim);margin-right:12px"></div>
+      <button class="btn-secondary btn-sm" onclick="exportData('csv')" title="Export CSV" style="padding:2px 6px">CSV</button>
+      <button class="btn-secondary btn-sm" onclick="exportData('json')" title="Export JSON" style="padding:2px 6px;margin-right:8px">JSON</button>
+      <div style="width:1px;height:16px;background:var(--border);margin-right:8px"></div>
       <button class="btn-secondary btn-sm" onclick="setTokenView('1h')" id="tbtn-1h">1h</button>
       <button class="btn-secondary btn-sm" onclick="setTokenView('1d')" id="tbtn-1d">1d</button>
       <button class="btn-secondary btn-sm" onclick="setTokenView('7d')" id="tbtn-7d">7d</button>
@@ -1199,6 +1202,35 @@ function formatTokenCount(n) {
 }
 
 window.__tokenView = '1h';
+
+function exportData(format) {
+  if (!window.__lastData || !window.__lastData.tokenUsage) return;
+  var usage = window.__lastData.tokenUsage;
+  
+  if (format === 'json') {
+    var dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(usage, null, 2));
+    var a = document.createElement('a');
+    a.href = dataStr;
+    a.download = "rotator-token-usage.json";
+    a.click();
+  } else if (format === 'csv') {
+    var csv = "Tier,Period,Model,InputTokens,OutputTokens,Requests\n";
+    ['months', 'days', 'hours', 'minutes'].forEach(function(tier) {
+      (usage[tier] || []).forEach(function(b) {
+        if (!b.byModel) return;
+        Object.keys(b.byModel).forEach(function(m) {
+          var d = b.byModel[m];
+          csv += tier + "," + b.period + "," + m + "," + d.inputTokens + "," + d.outputTokens + "," + d.requests + "\n";
+        });
+      });
+    });
+    var dataStrCSV = "data:text/csv;charset=utf-8," + encodeURIComponent(csv);
+    var a2 = document.createElement('a');
+    a2.href = dataStrCSV;
+    a2.download = "rotator-token-usage.csv";
+    a2.click();
+  }
+}
 
 function setTokenView(view) {
   window.__tokenView = view;

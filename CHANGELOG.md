@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-04-28
+
+### Added
+- **Export Data**: Added `CSV` and `JSON` export buttons to the Token Usage panel on the dashboard to easily download token metrics for external reporting.
+
 ## [1.4.0] - 2026-04-28
 
 ### Added
