@@ -843,6 +843,10 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       <button class="btn-secondary btn-sm" onclick="exportData('json')" title="Export JSON" style="padding:2px 6px;margin-right:8px">JSON</button>
       <div style="width:1px;height:16px;background:var(--border);margin-right:8px"></div>
       <button class="btn-secondary btn-sm" onclick="setTokenView('1h')" id="tbtn-1h">1h</button>
+      <button class="btn-secondary btn-sm" onclick="setTokenView('2h')" id="tbtn-2h">2h</button>
+      <button class="btn-secondary btn-sm" onclick="setTokenView('4h')" id="tbtn-4h">4h</button>
+      <button class="btn-secondary btn-sm" onclick="setTokenView('8h')" id="tbtn-8h">8h</button>
+      <button class="btn-secondary btn-sm" onclick="setTokenView('12h')" id="tbtn-12h">12h</button>
       <button class="btn-secondary btn-sm" onclick="setTokenView('1d')" id="tbtn-1d">1d</button>
       <button class="btn-secondary btn-sm" onclick="setTokenView('7d')" id="tbtn-7d">7d</button>
       <button class="btn-secondary btn-sm" onclick="setTokenView('1m')" id="tbtn-1m">1m</button>
@@ -866,7 +870,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 
 <div class="routing-panel" id="heatmapPanel" style="margin-top:12px;display:none">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-    <strong>Activity Heatmap (last 30d)</strong>
+    <strong>Activity Heatmap (last 60d)</strong>
     <span style="color:var(--text-dim);font-size:0.75rem">rows: hour · cols: day</span>
   </div>
   <div id="heatmapGrid"></div>
@@ -1238,9 +1242,19 @@ function setTokenView(view) {
 }
 
 function formatBucketLabel(period, view) {
-  if (view === '1h') return ':' + period.slice(14); // ":05"
-  if (view === '1d') return period.slice(11, 13) + 'h'; // "12h"
-  if (view === '7d' || view === '1m') return period.slice(5, 10); // "04-28"
+  try {
+    if (view.endsWith('h') && view !== '1d') {
+      var d;
+      if (period.length === 16) d = new Date(period + ':00Z');
+      else d = new Date(period);
+      if (!isNaN(d.getTime())) {
+        if (view === '1h') return ':' + String(d.getMinutes()).padStart(2, '0');
+        return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+      }
+    }
+    if (view === '1d') return period.slice(11, 13) + 'h';
+    if (view === '7d' || view === '1m') return period.slice(5, 10);
+  } catch(e) {}
   return period;
 }
 
@@ -1252,7 +1266,7 @@ function renderTokenChart(tokenUsage) {
   var view = window.__tokenView || '1h';
 
   // Highlight active button
-  ['1h', '1d', '7d', '1m'].forEach(function(v) {
+  ['1h', '2h', '4h', '8h', '12h', '1d', '7d', '1m'].forEach(function(v) {
     var btn = document.getElementById('tbtn-' + v);
     if (btn) btn.className = 'btn-secondary btn-sm' + (v === view ? ' active' : '');
   });
@@ -1262,11 +1276,12 @@ function renderTokenChart(tokenUsage) {
     return;
   }
 
-  // Helper: merge buckets into a map by truncated period key
-  function mergeBucketsBy(sources, sliceLen, limit) {
+  // Helper: merge buckets into a map by a grouping key
+  function mergeBucketsBy(sources, keyFn, limit) {
     var map = {};
     sources.forEach(function(b) {
-      var key = b.period.slice(0, sliceLen);
+      var key = keyFn(b.period);
+      if (!key) return;
       if (!map[key]) map[key] = { period: key, inputTokens: 0, outputTokens: 0, requests: 0, byModel: {} };
       map[key].inputTokens += b.inputTokens;
       map[key].outputTokens += b.outputTokens;
@@ -1281,19 +1296,50 @@ function renderTokenChart(tokenUsage) {
     return Object.keys(map).sort().map(function(k) { return map[k]; }).slice(-limit);
   }
 
+  function getLocalKey(periodStr, type) {
+    try {
+      var d;
+      if (periodStr.length === 10) d = new Date(periodStr + 'T00:00:00Z');
+      else if (periodStr.length === 13) d = new Date(periodStr + ':00:00Z');
+      else if (periodStr.length === 16) d = new Date(periodStr + ':00Z');
+      else d = new Date(periodStr);
+      if (isNaN(d.getTime())) return periodStr;
+      
+      var y = d.getFullYear();
+      var mo = String(d.getMonth() + 1).padStart(2, '0');
+      var da = String(d.getDate()).padStart(2, '0');
+      var h = String(d.getHours()).padStart(2, '0');
+      var mi = d.getMinutes();
+      
+      if (type === 'day') return y + '-' + mo + '-' + da;
+      if (type === 'hour') return y + '-' + mo + '-' + da + 'T' + h;
+      if (type === '5min') return y + '-' + mo + '-' + da + 'T' + h + ':' + String(Math.floor(mi/5)*5).padStart(2, '0');
+      if (type === '4min') return y + '-' + mo + '-' + da + 'T' + h + ':' + String(Math.floor(mi/4)*4).padStart(2, '0');
+      if (type === '2min') return y + '-' + mo + '-' + da + 'T' + h + ':' + String(Math.floor(mi/2)*2).padStart(2, '0');
+    } catch(e) {}
+    return periodStr;
+  }
+
   var allTiers = (tokenUsage.months || []).concat(tokenUsage.days || []).concat(tokenUsage.hours || []).concat(tokenUsage.minutes || []);
 
   // Pick tier based on view
   var buckets;
   if (view === '1h') {
     buckets = (tokenUsage.minutes || []).slice(-60);
+  } else if (view === '2h') {
+    buckets = (tokenUsage.minutes || []).slice(-120);
+  } else if (view === '4h') {
+    buckets = mergeBucketsBy((tokenUsage.minutes || []), function(p) { return getLocalKey(p, '2min'); }, 120);
+  } else if (view === '8h') {
+    buckets = mergeBucketsBy((tokenUsage.minutes || []), function(p) { return getLocalKey(p, '4min'); }, 120);
+  } else if (view === '12h') {
+    buckets = mergeBucketsBy((tokenUsage.minutes || []), function(p) { return getLocalKey(p, '5min'); }, 144);
   } else if (view === '1d') {
-    // Merge hours + minutes into hourly buckets, last 24h
-    buckets = mergeBucketsBy((tokenUsage.hours || []).concat(tokenUsage.minutes || []), 13, 24);
+    buckets = mergeBucketsBy((tokenUsage.hours || []).concat(tokenUsage.minutes || []), function(p) { return getLocalKey(p, 'hour'); }, 24);
   } else if (view === '7d') {
-    buckets = mergeBucketsBy(allTiers, 10, 7);
+    buckets = mergeBucketsBy(allTiers, function(p) { return getLocalKey(p, 'day'); }, 7);
   } else {
-    buckets = mergeBucketsBy(allTiers, 10, 30);
+    buckets = mergeBucketsBy(allTiers, function(p) { return getLocalKey(p, 'day'); }, 30);
   }
 
   if (!buckets || buckets.length === 0) {
@@ -1400,14 +1446,14 @@ function renderHeatmap(tokenUsage) {
   var hours = tokenUsage.hours || [];
   var minutes = tokenUsage.minutes || [];
   var now = new Date();
-  var daysCount = 30;
+  var daysCount = 60;
   var days = [];
   for (var i = daysCount - 1; i >= 0; i--) {
     var d = new Date(now);
     d.setDate(now.getDate() - i);
-    var key = d.toISOString().slice(0, 10);
-    // show label only for every 3rd day to avoid crowding
-    days.push({ key: key, label: (i % 3 === 0) ? key.slice(5) : '' });
+    var key = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    // show label only for every 7th day to avoid crowding
+    days.push({ key: key, label: (i % 7 === 0) ? key.slice(5) : '' });
   }
 
   var cellMap = {}; // day|hour -> requests
@@ -1417,18 +1463,30 @@ function renderHeatmap(tokenUsage) {
     cellMap[k] += reqs || 0;
   }
 
+  function parseLocal(periodStr) {
+    var d;
+    if (periodStr.length === 10) d = new Date(periodStr + 'T00:00:00Z');
+    else if (periodStr.length === 13) d = new Date(periodStr + ':00:00Z');
+    else if (periodStr.length === 16) d = new Date(periodStr + ':00Z');
+    else d = new Date(periodStr);
+    
+    if (isNaN(d.getTime())) return null;
+    return {
+      dayKey: d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'),
+      hour: d.getHours()
+    };
+  }
+
   hours.forEach(function(b) {
-    if (!b.period || b.period.length < 13) return;
-    var dayKey = b.period.slice(0, 10);
-    var hour = Number(b.period.slice(11, 13));
-    addBucket(dayKey, hour, b.requests);
+    if (!b.period) return;
+    var loc = parseLocal(b.period);
+    if (loc) addBucket(loc.dayKey, loc.hour, b.requests);
   });
 
   minutes.forEach(function(b) {
-    if (!b.period || b.period.length < 16) return;
-    var dayKey = b.period.slice(0, 10);
-    var hour = Number(b.period.slice(11, 13));
-    addBucket(dayKey, hour, b.requests);
+    if (!b.period) return;
+    var loc = parseLocal(b.period);
+    if (loc) addBucket(loc.dayKey, loc.hour, b.requests);
   });
 
   var max = 0;
@@ -1449,12 +1507,12 @@ function renderHeatmap(tokenUsage) {
     return 'rgba(56,189,248,0.92)';
   }
 
-  var html = '<div style="overflow-x:auto"><table style="width:100%;min-width:600px;border-collapse:separate;border-spacing:2px;font-family:JetBrains Mono,monospace;font-size:0.6rem">';
+  var html = '<div style="overflow-x:auto"><table style="width:100%;min-width:800px;border-collapse:separate;border-spacing:2px;table-layout:fixed;font-family:JetBrains Mono,monospace;font-size:0.6rem">';
   html += '<tr><th style="color:var(--text-dim);padding-right:6px;width:20px">h</th>';
-  days.forEach(function(d) { html += '<th style="color:var(--text-dim);font-weight:500;text-align:center">' + d.label + '</th>'; });
+  days.forEach(function(d) { html += '<th style="color:var(--text-dim);font-weight:500;text-align:left;white-space:nowrap;overflow:visible">' + d.label + '</th>'; });
   html += '</tr>';
 
-  for (var hour = 23; hour >= 0; hour--) {
+  for (var hour = 0; hour < 24; hour++) {
     html += '<tr><td style="color:var(--text-dim);padding-right:6px;text-align:right">' + String(hour).padStart(2, '0') + '</td>';
     for (var j = 0; j < days.length; j++) {
       var day = days[j].key;

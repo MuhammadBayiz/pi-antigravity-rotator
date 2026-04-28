@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [1.4.5] - 2026-04-28
+
+### Added
+- **Extended Token Views**: Added `2h`, `4h`, `8h`, and `12h` options to the Token Usage chart. The backend now retains up to 12 hours of minute-level resolution for accurate high-fidelity zooming.
+
+### Changed
+- **Activity Heatmap Scaling**: Expanded the heatmap to cover the last 60 days. The grid is now responsive, taking up the full width of the screen without distorting cell proportions, and the Y-axis now orders hours naturally from 00 to 23.
+- **Timezone Alignment**: X-axis labels on the Token Usage chart and the Heatmap now correctly reflect the browser's local time instead of UTC.
+
 ## [1.4.1] - 2026-04-28
 
 ### Added
