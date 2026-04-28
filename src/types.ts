@@ -89,6 +89,32 @@ export function resolveQuotaModelKey(requestModel: string): string | null {
 	return null;
 }
 
+/**
+ * Resolves the precise model name for metrics/savings/latency/logs.
+ * Unlike resolveQuotaModelKey, this preserves the distinction between:
+ * - gemini-3.1-pro-low vs gemini-3.1-pro-high (same quota pool, different display)
+ * - claude-sonnet-4-6 vs claude-opus-4-6-thinking (different pricing)
+ */
+export function resolveDisplayModelKey(requestModel: string): string {
+	const lower = requestModel.toLowerCase();
+	// Claude — distinguish sonnet vs opus
+	if (lower.includes("claude")) {
+		if (lower.includes("sonnet")) return "claude-sonnet-4-6";
+		if (lower.includes("opus")) return "claude-opus-4-6-thinking";
+		return "claude-opus-4-6-thinking"; // fallback
+	}
+	// Gemini Pro — distinguish low vs high
+	if (lower.includes("gemini") && lower.includes("pro")) {
+		if (lower.includes("-low")) return "gemini-3.1-pro-low";
+		if (lower.includes("-high")) return "gemini-3.1-pro-high";
+		return "gemini-3.1-pro"; // unspecified variant
+	}
+	// Flash
+	if (lower.includes("gemini") && lower.includes("flash")) return "gemini-3-flash";
+	// Fallback: return as-is cleaned up
+	return requestModel;
+}
+
 // Runtime state for a single account
 export interface AccountRuntime {
 	config: AccountConfig;
@@ -288,10 +314,12 @@ export interface TokenUsageData {
 
 // Pricing per 1M tokens (USD) — what these would cost on paid APIs
 export const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: number }> = {
-	"claude-opus-4-6-thinking": { inputPer1M: 5.00, outputPer1M: 25.00 },
-	"claude-sonnet-4-6":        { inputPer1M: 3.00, outputPer1M: 15.00 },
-	"gemini-3.1-pro":           { inputPer1M: 2.00, outputPer1M: 12.00 },
-	"gemini-3-flash":           { inputPer1M: 0.50, outputPer1M: 3.00 },
+	"claude-opus-4-6-thinking": { inputPer1M: 5.00,  outputPer1M: 25.00 },
+	"claude-sonnet-4-6":        { inputPer1M: 3.00,  outputPer1M: 15.00 },
+	"gemini-3.1-pro":           { inputPer1M: 2.00,  outputPer1M: 12.00 },
+	"gemini-3.1-pro-low":       { inputPer1M: 2.00,  outputPer1M: 12.00 },
+	"gemini-3.1-pro-high":      { inputPer1M: 2.00,  outputPer1M: 12.00 },
+	"gemini-3-flash":           { inputPer1M: 0.50,  outputPer1M: 3.00 },
 };
 
 // Antigravity OAuth constants (same as pi-mono)

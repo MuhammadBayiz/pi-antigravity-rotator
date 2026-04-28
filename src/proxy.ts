@@ -2,7 +2,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { Readable } from "node:stream";
-import { ANTIGRAVITY_ENDPOINTS, resolveQuotaModelKey } from "./types.js";
+import { ANTIGRAVITY_ENDPOINTS, resolveQuotaModelKey, resolveDisplayModelKey } from "./types.js";
 import type { AccountRuntime } from "./types.js";
 import type { AccountRotator } from "./rotator.js";
 import {
@@ -355,7 +355,8 @@ async function handleProxyRequest(
 		}
 
 		const label = account.config.label || account.config.email;
-		const modelKey = resolveQuotaModelKey(body.model) ?? body.model;
+		const modelKey = resolveQuotaModelKey(body.model) ?? body.model;      // quota routing
+		const displayModelKey = resolveDisplayModelKey(body.model);            // metrics/logs
 		const requestId = `${modelKey}-${Date.now().toString(36)}-${attempt + 1}`;
 		proxyLog(`[${requestId}] START account=${label} model=${body.model} attempt=${attempt + 1}`);
 		const requestStartMs = Date.now();
@@ -480,7 +481,7 @@ async function handleProxyRequest(
 					rotator.recordLatency(body.model, ttfbMs, totalMs);
 				logRequestEnd(response.status, `ttfbMs=${ttfbMs}`);
 					rotator.recordRequestLog({
-						model: resolveQuotaModelKey(body.model) ?? body.model,
+						model: displayModelKey,
 						account: label,
 						statusCode: response.status,
 						ttfbMs,

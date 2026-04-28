@@ -1707,6 +1707,18 @@ function renderForecastPanel(data) {
     burnByModel[m] = (burnByModel[m] / minuteSpan) * 60; // reqs/hour
   });
 
+  // Collapse display model burn rates into quota pool keys for forecast
+  // e.g. gemini-3.1-pro-low + gemini-3.1-pro-high → gemini-3.1-pro
+  // e.g. claude-sonnet-4-6 + claude-opus-4-6-thinking → claude-opus-4-6-thinking (quota pool)
+  var burnByPool = {};
+  Object.keys(burnByModel).forEach(function(displayKey) {
+    var poolKey = displayKey;
+    if (displayKey.startsWith('gemini-3.1-pro')) poolKey = 'gemini-3.1-pro';
+    if (displayKey === 'claude-sonnet-4-6') poolKey = 'claude-opus-4-6-thinking';
+    if (!burnByPool[poolKey]) burnByPool[poolKey] = 0;
+    burnByPool[poolKey] += burnByModel[displayKey];
+  });
+
   var models = Object.keys(modelQuota).sort();
   if (models.length === 0) {
     panel.style.display = 'none';
@@ -1727,7 +1739,7 @@ function renderForecastPanel(data) {
     var q = modelQuota[m];
     var avgQuota = q.accountCount > 0 ? Math.round(q.totalPercent / q.accountCount) : 0;
     var color = getModelColor(m);
-    var rate = burnByModel[m] || 0;
+    var rate = burnByPool[m] || 0;
     var rateLabel = rate > 0 ? rate.toFixed(1) + ' req/h' : 'idle';
 
     // Estimate: assume ~100 requests per full 100% quota window (empirical)

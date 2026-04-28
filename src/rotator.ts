@@ -24,6 +24,7 @@ import {
 	QUOTA_USER_AGENT,
 	QUOTA_MODEL_KEYS,
 	resolveQuotaModelKey,
+	resolveDisplayModelKey,
 } from "./types.js";
 import { getStatePath } from "./paths.js";
 import { saveAccountsConfig } from "./account-store.js";
@@ -352,25 +353,42 @@ export class AccountRotator {
 			// Cross-model correlation (SECOND PASS):
 			// If ANY model has a 5h timer right now, ALL OTHER models showing 7d are also Pro.
 			// We save their resetTime as the Pro anchor.
+			// IMPORTANT: Only overwrite FREE→PRO if FREE was not recorded in a PREVIOUS poll.
+			// We detect this by checking if free.lastSeen < now (i.e. from a prior poll, not this one).
 			const anyModelIs5h = account.quota.some((mq) => mq.timerType === "5h");
 			if (anyModelIs5h) {
 				for (const q of account.quota) {
 					if (q.timerType !== "7d") continue;
 					const tracker = account.quotaWindows[q.modelKey];
 					if (!tracker) continue;
-					if (tracker.pro.lastSeenAs5h > 0) continue; // has its own direct 5h, skip
+					if (tracker.pro.lastSeenAs5h > 0) continue; // has its own direct 5h
 					const currentResetMs = q.resetTime ? new Date(q.resetTime).getTime() : 0;
-					tracker.pro.lastSeen = now;
-					tracker.pro.lastSeenAs5hCross = now;
-					tracker.pro.resetTimeMs = currentResetMs;
-					tracker.pro.resetTime = q.resetTime;
-					tracker.pro.lastQuota = q.percentRemaining;
+
+					// If FREE was already written this same poll (within 1s), it means
+					// the first pass classified it as Free before we knew Flash was 5h.
+					// Cross-correlation wins: overwrite it to PRO and clear Free.
+					const freeJustWritten = tracker.free.lastSeen > 0 && (now - tracker.free.lastSeen) < 1000;
+					if (freeJustWritten) {
+						// Was incorrectly written as Free this poll — undo it
+						tracker.free = { lastSeen: 0, resetTimeMs: 0, resetTime: null, lastQuota: -1 };
+					}
+
+					// Only update PRO anchor if it doesn't already have a confirmed anchor
+					// with a DIFFERENT resetTime (that would mean a fresh Free timer crept in)
+					const proAnchorDiffers = tracker.pro.resetTimeMs > 0 && Math.abs(currentResetMs - tracker.pro.resetTimeMs) >= 300000;
+					if (!proAnchorDiffers) {
+						tracker.pro.lastSeen = now;
+						tracker.pro.lastSeenAs5hCross = now;
+						tracker.pro.resetTimeMs = currentResetMs;
+						tracker.pro.resetTime = q.resetTime;
+						tracker.pro.lastQuota = q.percentRemaining;
+					}
 				}
 			} else {
 				// No 5h anywhere on this account.
 				// For cross-inferred models: compare current resetTime against the Pro anchor.
 				// If resetTime CHANGED → Google gave back the Free timer → reclassify as Free.
-				// If resetTime MATCHES → still Pro 7d cooldown (5h just expired, account still in Pro group).
+				// If resetTime MATCHES → still Pro 7d cooldown (5h just expired, still in Pro group).
 				for (const q of account.quota) {
 					if (q.timerType !== "7d") continue;
 					const tracker = account.quotaWindows[q.modelKey];
@@ -380,16 +398,15 @@ export class AccountRotator {
 					const currentResetMs = q.resetTime ? new Date(q.resetTime).getTime() : 0;
 					const resetStillMatches = tracker.pro.resetTimeMs > 0 && Math.abs(currentResetMs - tracker.pro.resetTimeMs) < 300000;
 					if (resetStillMatches) {
-						// Reset hasn't changed → still Pro 7d. Update quota.
+						// Reset unchanged → still Pro 7d. Update quota only.
 						tracker.pro.lastSeen = now;
 						tracker.pro.lastQuota = q.percentRemaining;
 					} else {
-						// Reset changed → Google reverted to Free timer. Reclassify.
+						// Reset changed → Google gave back Free timer. Reclassify.
 						tracker.free.lastSeen = now;
 						tracker.free.resetTimeMs = currentResetMs;
 						tracker.free.resetTime = q.resetTime;
 						tracker.free.lastQuota = q.percentRemaining;
-						// Clear the stale Pro inference
 						tracker.pro = { lastSeen: 0, lastSeenAs5h: 0, lastSeenAs5hCross: 0, resetTimeMs: 0, resetTime: null, lastQuota: -1 };
 					}
 				}
@@ -754,7 +771,7 @@ export class AccountRotator {
 	recordTokenUsage(model: string | undefined, inputTokens: number, outputTokens: number): void {
 		const now = new Date();
 		const minuteKey = now.toISOString().slice(0, 16); // "2026-04-28T12:05"
-		const modelKey = model ? (resolveQuotaModelKey(model) ?? model) : "unknown";
+		const modelKey = model ? resolveDisplayModelKey(model) : "unknown";
 
 		// Upsert minute bucket
 		let bucket = this.tokenBuckets.minutes.find(b => b.period === minuteKey);
@@ -778,7 +795,7 @@ export class AccountRotator {
 	}
 
 	recordLatency(model: string | undefined, ttfbMs: number, totalMs: number): void {
-		const modelKey = model ? (resolveQuotaModelKey(model) ?? model) : "unknown";
+		const modelKey = model ? resolveDisplayModelKey(model) : "unknown";
 		let records = this.latencyRecords.get(modelKey);
 		if (!records) {
 			records = [];
