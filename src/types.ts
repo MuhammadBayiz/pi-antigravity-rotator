@@ -157,10 +157,7 @@ export interface QuotaWindowInfo {
 }
 
 export interface DualWindowTracker {
-	pro: QuotaWindowInfo & {
-		lastSeenAs5h: number;       // timestamp when last seen with 5h timer specifically
-		lastSeenAs5hCross: number;  // timestamp when inferred as Pro via cross-model (another model was 5h)
-	};
+	pro: QuotaWindowInfo;
 	free: QuotaWindowInfo;
 }
 

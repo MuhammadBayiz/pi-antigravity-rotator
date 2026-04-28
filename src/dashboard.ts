@@ -1098,8 +1098,11 @@ function renderDualWindows(account) {
     } else {
       freeLine = '<div class="dw-row"><span class="dw-badge dw-badge-free">FREE</span><span class="dw-empty">no data</span></div>';
     }
+    
+    var swapBtn = '<button class="btn-clear-flight" style="margin-left:auto" onclick="swapWindows(\\'' + account.email + '\\', \\'' + modelKey + '\\')">Swap</button>';
+
     return '<div class="dw-model">' +
-      '<div class="dw-model-name">' + shortName + '</div>' +
+      '<div class="dw-model-name" style="display:flex;align-items:center">' + shortName + swapBtn + '</div>' +
       proLine + freeLine +
     '</div>';
   }).join('');
@@ -2002,6 +2005,12 @@ async function setAccountFreshWindowOverride(email, enabled) {
 async function clearInFlight(email, modelKey) {
   if (!confirm('Clear in-flight counter for this account/model? Use only when you are sure the request is stuck.')) return;
   await fetch('/api/clear-inflight/' + encodeURIComponent(email) + '/' + encodeURIComponent(modelKey), { method: 'POST' });
+  refresh();
+}
+
+async function swapWindows(email, modelKey) {
+  if (!confirm('Manually swap Pro and Free data for ' + modelKey + '?\n\nUse this only if you know the algorithm classified the timers backward due to Google API weirdness.')) return;
+  await fetch('/api/account/swap-windows/' + encodeURIComponent(email) + '/' + encodeURIComponent(modelKey), { method: 'POST' });
   refresh();
 }
 

@@ -311,170 +311,74 @@ export class AccountRotator {
 			this.log(`RAW POLL ${account.config.email} -> ${rawLog}`);
 			// ---------------------------------------
 
-			// Record dual-window quota tracking per model
+			// Record dual-window quota tracking per model (Immutable Anchors Architecture)
 			const now = Date.now();
-			const SIX_HOURS_MS = 6 * 3600 * 1000;
-			const ONE_HOUR_MS = 3600 * 1000;
+			const FIVE_HOURS_10MIN = (5 * 60 + 10) * 60 * 1000;
+			const FIVE_MIN = 5 * 60 * 1000;
 
+			// Step 1: Initialize tracking and check for the definitive PRO signal (genuine 5h timer)
+			let accountIsDefinitivelyPro = false;
 			for (const q of account.quota) {
-				const currentResetMs = q.resetTime ? new Date(q.resetTime).getTime() : 0;
-
-				// Initialize tracker if missing
 				if (!account.quotaWindows[q.modelKey]) {
 					account.quotaWindows[q.modelKey] = {
-						pro: { lastSeen: 0, lastSeenAs5h: 0, lastSeenAs5hCross: 0, resetTimeMs: 0, resetTime: null, lastQuota: -1 },
+						pro: { lastSeen: 0, resetTimeMs: 0, resetTime: null, lastQuota: -1 },
 						free: { lastSeen: 0, resetTimeMs: 0, resetTime: null, lastQuota: -1 },
 					};
 				}
-				const tracker = account.quotaWindows[q.modelKey];
-
 				if (q.timerType === "5h") {
-					// Sanity check: a genuine 5h timer can have AT MOST 5h remaining.
-					// If resetTime is more than 5h 10min from now, Google lied or it's a 7d in disguise.
-					const FIVE_HOURS_10MIN = (5 * 60 + 10) * 60 * 1000;
-					const isGenuine5h = currentResetMs === 0 || (currentResetMs - now) <= FIVE_HOURS_10MIN;
-					if (!isGenuine5h) {
-						// Treat as Free 7d — Google returned a stale/wrong timerType
-						tracker.free.lastSeen = now;
-						tracker.free.resetTimeMs = currentResetMs;
-						tracker.free.resetTime = q.resetTime;
-						tracker.free.lastQuota = q.percentRemaining;
-					} else {
-						// Confirmed Pro 5h
-						tracker.pro.lastSeen = now;
-						tracker.pro.lastSeenAs5h = now;
-						tracker.pro.resetTimeMs = currentResetMs;
-						tracker.pro.resetTime = q.resetTime;
-						tracker.pro.lastQuota = q.percentRemaining;
-					}
-				} else if (q.timerType === "7d") {
-					// Strictly match against recorded Pro resetTime (5 min tolerance)
-					const resetMatchesPro = tracker.pro.resetTimeMs > 0 && Math.abs(currentResetMs - tracker.pro.resetTimeMs) < 300000;
-					// This specific model recently had a 5h timer (natural expiry path)
-					const recentlyWas5h = tracker.pro.lastSeenAs5h > 0 && (now - tracker.pro.lastSeenAs5h) < SIX_HOURS_MS;
-
-					if (resetMatchesPro || recentlyWas5h) {
-						// Confirmed Pro 7d
-						tracker.pro.lastSeen = now;
-						tracker.pro.resetTimeMs = currentResetMs;
-						tracker.pro.resetTime = q.resetTime;
-						tracker.pro.lastQuota = q.percentRemaining;
-					} else {
-						// Free 7d
-						tracker.free.lastSeen = now;
-						tracker.free.resetTimeMs = currentResetMs;
-						tracker.free.resetTime = q.resetTime;
-						tracker.free.lastQuota = q.percentRemaining;
+					const currentResetMs = q.resetTime ? new Date(q.resetTime).getTime() : 0;
+					if (currentResetMs === 0 || (currentResetMs - now) <= FIVE_HOURS_10MIN) {
+						accountIsDefinitivelyPro = true;
 					}
 				}
-				// fresh: no timer active, don't update either window
 			}
 
-			// --- ACCOUNT-LEVEL DETECTION (PRE-PASS) ---
-			// Check if ANY model explicitly signals a transition to Free.
-			// A model signals Free if it's currently a 7d timer whose resetTime DOES NOT match
-			// a previously established Pro anchor.
-			let accountFlippedToFree = false;
+			// Step 2: Update permanent anchors based on the definitive signal
 			for (const q of account.quota) {
-				if (q.timerType !== "7d") continue;
+				if (q.timerType === "fresh") continue; // Fresh gives us no reset time to anchor
 				const tracker = account.quotaWindows[q.modelKey];
-				if (!tracker) continue;
-				// If it has no pro memory, we can't tell if it flipped
-				if (tracker.pro.resetTimeMs === 0) continue;
-				
 				const currentResetMs = q.resetTime ? new Date(q.resetTime).getTime() : 0;
-				const resetMatchesPro = Math.abs(currentResetMs - tracker.pro.resetTimeMs) < 300000;
-				
-				if (!resetMatchesPro) {
-					// The timer changed! This is a definitive signal from Google that the
-					// Free timer has been restored for this model.
-					accountFlippedToFree = true;
-					break;
+				if (currentResetMs === 0) continue;
+
+				// Has the real-world time passed the existing Pro anchor?
+				if (tracker.pro.resetTimeMs > 0 && now > tracker.pro.resetTimeMs) {
+					// The old Pro anchor expired naturally. We clear it to make room for a new cycle.
+					tracker.pro.resetTimeMs = 0;
+					tracker.pro.resetTime = null;
 				}
-			}
+				// Has the real-world time passed the existing Free anchor?
+				if (tracker.free.resetTimeMs > 0 && now > tracker.free.resetTimeMs) {
+					// The old Free anchor expired naturally. We clear it to make room for a new cycle.
+					tracker.free.resetTimeMs = 0;
+					tracker.free.resetTime = null;
+				}
 
-			// Cross-model correlation (SECOND PASS):
-			// If ANY model has a GENUINE 5h timer right now, ALL OTHER models showing 7d are also Pro,
-			// EXCEPT if we just detected that the account flipped back to Free.
-			const anyModelIs5h = account.quota.some((mq) => {
-				if (mq.timerType !== "5h") return false;
-				const ms = mq.resetTime ? new Date(mq.resetTime).getTime() : 0;
-				const FIVE_HOURS_10MIN = (5 * 60 + 10) * 60 * 1000;
-				return ms === 0 || (ms - now) <= FIVE_HOURS_10MIN;
-			});
-			
-			if (anyModelIs5h && !accountFlippedToFree) {
-				for (const q of account.quota) {
-					if (q.timerType !== "7d") continue;
-					const tracker = account.quotaWindows[q.modelKey];
-					if (!tracker) continue;
-					if (tracker.pro.lastSeenAs5h > 0) continue; // has its own direct 5h
-					const currentResetMs = q.resetTime ? new Date(q.resetTime).getTime() : 0;
+				const matchesPro = tracker.pro.resetTimeMs > 0 && Math.abs(currentResetMs - tracker.pro.resetTimeMs) < FIVE_MIN;
+				const matchesFree = tracker.free.resetTimeMs > 0 && Math.abs(currentResetMs - tracker.free.resetTimeMs) < FIVE_MIN;
 
-					// If FREE was already written this same poll (within 1s), it means
-					// the first pass classified it as Free before we knew Flash was 5h.
-					// Cross-correlation wins: overwrite it to PRO and clear Free.
-					const freeJustWritten = tracker.free.lastSeen > 0 && (now - tracker.free.lastSeen) < 1000;
-					if (freeJustWritten) {
-						// Was incorrectly written as Free this poll — undo it
-						tracker.free = { lastSeen: 0, resetTimeMs: 0, resetTime: null, lastQuota: -1 };
-					}
-
+				if (matchesPro) {
+					// It's the Pro window. Update quota.
 					tracker.pro.lastSeen = now;
-					tracker.pro.lastSeenAs5hCross = now;
-					tracker.pro.resetTimeMs = currentResetMs;
-					tracker.pro.resetTime = q.resetTime;
 					tracker.pro.lastQuota = q.percentRemaining;
-				}
-			} else {
-				// No 5h anywhere on this account (OR account definitively flipped to Free).
-				// For cross-inferred models: compare current resetTime against the Pro anchor.
-				// If resetTime CHANGED → Google gave back the Free timer → reclassify as Free.
-				// If resetTime MATCHES → still Pro 7d cooldown.
-				for (const q of account.quota) {
-					if (q.timerType !== "7d") continue;
-					const tracker = account.quotaWindows[q.modelKey];
-					if (!tracker) continue;
-					if (tracker.pro.lastSeenAs5h > 0) continue; // has its own direct 5h history
-					if (tracker.pro.lastSeenAs5hCross === 0) continue; // never inferred as Pro
-					const currentResetMs = q.resetTime ? new Date(q.resetTime).getTime() : 0;
-					
-					// If accountFlippedToFree is true, we force reclassification regardless of match,
-					// because the 7d timer might coincidentally match if the account was rarely used.
-					const resetStillMatches = !accountFlippedToFree && tracker.pro.resetTimeMs > 0 && Math.abs(currentResetMs - tracker.pro.resetTimeMs) < 300000;
-					
-					if (resetStillMatches) {
-						// Reset unchanged → still Pro 7d. Update quota only.
+				} else if (matchesFree) {
+					// It's the Free window. Update quota.
+					tracker.free.lastSeen = now;
+					tracker.free.lastQuota = q.percentRemaining;
+				} else {
+					// This is a BRAND NEW reset time (doesn't match either anchor).
+					// We must assign it to either the Pro bucket or the Free bucket.
+					if (accountIsDefinitivelyPro) {
+						// We have absolute proof the account is Pro right now.
 						tracker.pro.lastSeen = now;
+						tracker.pro.resetTimeMs = currentResetMs;
+						tracker.pro.resetTime = q.resetTime;
 						tracker.pro.lastQuota = q.percentRemaining;
 					} else {
-						// Reset changed (or forced flip) → Google gave back Free timer. Reclassify THIS model.
+						// We have NO proof the account is Pro. Assume Free.
 						tracker.free.lastSeen = now;
 						tracker.free.resetTimeMs = currentResetMs;
 						tracker.free.resetTime = q.resetTime;
 						tracker.free.lastQuota = q.percentRemaining;
-						tracker.pro = { lastSeen: 0, lastSeenAs5h: 0, lastSeenAs5hCross: 0, resetTimeMs: 0, resetTime: null, lastQuota: -1 };
-					}
-				}
-
-				// ACCOUNT-LEVEL PROPAGATION:
-				// If we forced a flip or detected it, ensure ALL cross-inferred models on this account
-				// flip to Free synchronously.
-				if (accountFlippedToFree) {
-					for (const q of account.quota) {
-						const tracker = account.quotaWindows[q.modelKey];
-						if (!tracker) continue;
-						// Only wipe cross-inferred Pro windows
-						if (tracker.pro.lastSeenAs5h > 0) continue; // direct 5h — don't touch
-						if (tracker.pro.lastSeenAs5hCross === 0) continue; // not a cross-inference
-						
-						// Write current quota as Free and clear stale Pro anchor
-						const currentResetMs = q.resetTime ? new Date(q.resetTime).getTime() : 0;
-						tracker.free.lastSeen = now;
-						tracker.free.resetTimeMs = currentResetMs;
-						tracker.free.resetTime = q.resetTime;
-						tracker.free.lastQuota = q.percentRemaining;
-						tracker.pro = { lastSeen: 0, lastSeenAs5h: 0, lastSeenAs5hCross: 0, resetTimeMs: 0, resetTime: null, lastQuota: -1 };
 					}
 				}
 			}
@@ -1395,6 +1299,10 @@ export class AccountRotator {
 		}
 	}
 
+	public getAccountByEmail(email: string): AccountRuntime | undefined {
+		return this.accounts.find((a) => a.config.email === email);
+	}
+
 	// =========================================================================
 	// Pro Family Sharing Advisor
 	// =========================================================================
@@ -1409,6 +1317,7 @@ export class AccountRotator {
 	private isProOriginatedTimer(account: AccountRuntime, modelKey: string): boolean {
 		const tracker = account.quotaWindows[modelKey];
 		if (!tracker || tracker.pro.lastSeen === 0) return false;
+		
 		const currentQuota = account.quota.find(
 			(q) => q.modelKey.includes(modelKey) || modelKey.includes(q.modelKey),
 		);
@@ -1417,27 +1326,8 @@ export class AccountRotator {
 		const currentResetMs = currentQuota.resetTime ? new Date(currentQuota.resetTime).getTime() : 0;
 		if (tracker.pro.resetTimeMs === 0 || currentResetMs === 0) return false;
 
-		// Tight tolerance: 5 minutes instead of 1 hour
-		const matchesRecordedPro = Math.abs(currentResetMs - tracker.pro.resetTimeMs) < 300000;
-
-		// Also verify the entire account isn't clearly falling back to Free.
-		// If ANY model on this account currently has a GENUINE 5h timer, we are definitively in Pro mode.
-		// HOWEVER, we only consider THIS model's 7d timer as "Pro Originated" if it matches
-		// the recorded Pro resetTime.
-		const anyModelIs5h = account.quota.some((q) => {
-			if (q.timerType !== "5h") return false;
-			const ms = q.resetTime ? new Date(q.resetTime).getTime() : 0;
-			const FIVE_HOURS_10MIN = (5 * 60 + 10) * 60 * 1000;
-			return ms === 0 || (ms - Date.now()) <= FIVE_HOURS_10MIN;
-		});
-		
-		// If another model is genuinely 5h, but THIS model's 7d timer doesn't match our recorded Pro reset,
-		// then this 7d timer is just the Free timer dragging along.
-		if (anyModelIs5h && !matchesRecordedPro) {
-			return false;
-		}
-
-		return matchesRecordedPro;
+		// Tight 5-min tolerance against permanent anchor
+		return Math.abs(currentResetMs - tracker.pro.resetTimeMs) < 300000;
 	}
 
 	/**

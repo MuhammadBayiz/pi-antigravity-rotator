@@ -634,6 +634,31 @@ export function startProxy(rotator: AccountRotator, port: number): void {
 			return;
 		}
 
+		if (method === "POST" && url?.startsWith("/api/account/swap-windows/")) {
+			const rest = url.slice("/api/account/swap-windows/".length);
+			const firstSlash = rest.indexOf("/");
+			const email = decodeURIComponent(firstSlash >= 0 ? rest.slice(0, firstSlash) : rest);
+			const modelKey = firstSlash >= 0 ? decodeURIComponent(rest.slice(firstSlash + 1)) : undefined;
+			if (!modelKey) {
+				res.writeHead(400);
+				res.end("Missing modelKey");
+				return;
+			}
+			const account = rotator.getAccountByEmail(email);
+			if (account && account.quotaWindows && account.quotaWindows[modelKey]) {
+				const temp = account.quotaWindows[modelKey].pro;
+				account.quotaWindows[modelKey].pro = account.quotaWindows[modelKey].free;
+				account.quotaWindows[modelKey].free = temp;
+				rotator.saveState();
+				res.writeHead(200);
+				res.end(JSON.stringify({ success: true }));
+			} else {
+				res.writeHead(404);
+				res.end("Account or model not found");
+			}
+			return;
+		}
+
 		if (method === "POST" && (url === "/api/settings/fresh-window-starts/on" || url === "/api/settings/fresh-window-starts/off")) {
 			serveFreshWindowStartsApi(res, rotator, url.endsWith("/on"));
 			return;
