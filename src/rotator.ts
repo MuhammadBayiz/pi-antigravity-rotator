@@ -300,7 +300,8 @@ export class AccountRotator {
 			}
 
 			const data = (await response.json()) as GoogleQuotaResponse;
-			account.quota = this.extractQuotas(data);
+			const oldQuota = account.quota || [];
+			account.quota = this.extractQuotas(data, oldQuota);
 			account.lastQuotaPoll = Date.now();
 
 			// --- RAW QUOTA LOGGING FOR DEBUGGING ---
@@ -387,7 +388,7 @@ export class AccountRotator {
 		}
 	}
 
-	private extractQuotas(data: GoogleQuotaResponse): ModelQuota[] {
+	private extractQuotas(data: GoogleQuotaResponse, oldQuota: ModelQuota[]): ModelQuota[] {
 		const quotas: ModelQuota[] = [];
 		const now = Date.now();
 
@@ -406,10 +407,20 @@ export class AccountRotator {
 				let timerType: ModelQuota["timerType"] = "fresh";
 
 				if (resetTime) {
-					const resetMs = new Date(resetTime).getTime();
-					if (resetMs > now) {
-						const durationMs = resetMs - now;
-						timerType = durationMs < 6 * 60 * 60 * 1000 ? "5h" : "7d";
+					const oldQ = oldQuota.find(q => q.modelKey === config.key);
+					// If the resetTime is exactly the same as the previous poll, preserve the old timerType.
+					// A timer doesn't change its nature just because it gets closer to zero.
+					if (oldQ && oldQ.resetTime === resetTime && oldQ.timerType !== "fresh") {
+						timerType = oldQ.timerType;
+					} else {
+						// It's a BRAND NEW timer (or we restarted the service).
+						// Since it just started, we can measure the distance to determine its type.
+						const resetMs = new Date(resetTime).getTime();
+						if (resetMs > now) {
+							const durationMs = resetMs - now;
+							// If the new timer is < 6 hours away, it's a 5h timer. Otherwise 7d.
+							timerType = durationMs < 6 * 60 * 60 * 1000 ? "5h" : "7d";
+						}
 					}
 				}
 
