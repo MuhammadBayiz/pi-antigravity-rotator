@@ -313,36 +313,33 @@ export class AccountRotator {
 				// Initialize tracker if missing
 				if (!account.quotaWindows[q.modelKey]) {
 					account.quotaWindows[q.modelKey] = {
-						pro: { lastSeen: 0, lastSeenAs5h: 0, resetTimeMs: 0, resetTime: null, lastQuota: -1 },
+						pro: { lastSeen: 0, lastSeenAs5h: 0, lastSeenAs5hCross: 0, resetTimeMs: 0, resetTime: null, lastQuota: -1 },
 						free: { lastSeen: 0, resetTimeMs: 0, resetTime: null, lastQuota: -1 },
 					};
 				}
 				const tracker = account.quotaWindows[q.modelKey];
 
 				if (q.timerType === "5h") {
-					// Always Pro
+					// Definitely Pro
 					tracker.pro.lastSeen = now;
 					tracker.pro.lastSeenAs5h = now;
 					tracker.pro.resetTimeMs = currentResetMs;
 					tracker.pro.resetTime = q.resetTime;
 					tracker.pro.lastQuota = q.percentRemaining;
 				} else if (q.timerType === "7d") {
-					// Determine: is this Pro 7d or Free 7d?
-					// Use tight 5-minute tolerance for matching known Pro windows
+					// Strictly match against recorded Pro resetTime (5 min tolerance)
 					const resetMatchesPro = tracker.pro.resetTimeMs > 0 && Math.abs(currentResetMs - tracker.pro.resetTimeMs) < 300000;
-					
+					// This specific model recently had a 5h timer (natural expiry path)
 					const recentlyWas5h = tracker.pro.lastSeenAs5h > 0 && (now - tracker.pro.lastSeenAs5h) < SIX_HOURS_MS;
 
-					// A 7d timer is ONLY Pro if it strictly matches a known Pro reset time, 
-					// or if this specific model just transitioned out of a 5h timer.
-					// We DO NOT use cross-model correlation here to avoid dragging Free 7d timers into Pro memory.
-					if (resetMatchesPro || (recentlyWas5h && tracker.pro.resetTimeMs !== currentResetMs)) {
+					if (resetMatchesPro || recentlyWas5h) {
+						// Confirmed Pro 7d
 						tracker.pro.lastSeen = now;
 						tracker.pro.resetTimeMs = currentResetMs;
 						tracker.pro.resetTime = q.resetTime;
 						tracker.pro.lastQuota = q.percentRemaining;
 					} else {
-						// This is a Free 7d timer.
+						// Free 7d
 						tracker.free.lastSeen = now;
 						tracker.free.resetTimeMs = currentResetMs;
 						tracker.free.resetTime = q.resetTime;
@@ -352,7 +349,50 @@ export class AccountRotator {
 				// fresh: no timer active, don't update either window
 			}
 
-			// Cross-model Pro correlation is now handled directly in the loop above via anyModelIs5h check.
+			// Cross-model correlation (SECOND PASS):
+			// If ANY model has a 5h timer right now, ALL OTHER models showing 7d are also Pro.
+			// We track this separately via lastSeenAs5hCross so we can expire it independently.
+			const anyModelIs5h = account.quota.some((mq) => mq.timerType === "5h");
+			if (anyModelIs5h) {
+				for (const q of account.quota) {
+					if (q.timerType !== "7d") continue;
+					const tracker = account.quotaWindows[q.modelKey];
+					if (!tracker) continue;
+					// Only apply cross-correlation if this model has never had a direct 5h
+					// AND has no recorded Pro window yet (or the existing one is stale)
+					if (tracker.pro.lastSeenAs5h > 0) continue; // already knows its own 5h, skip
+					const currentResetMs = q.resetTime ? new Date(q.resetTime).getTime() : 0;
+					tracker.pro.lastSeen = now;
+					tracker.pro.lastSeenAs5hCross = now; // mark as inferred, not direct
+					tracker.pro.resetTimeMs = currentResetMs;
+					tracker.pro.resetTime = q.resetTime;
+					tracker.pro.lastQuota = q.percentRemaining;
+				}
+			} else {
+				// No 5h anywhere on this account right now.
+				// Expire cross-model inferences older than 10 minutes — the 5h is gone.
+				const TEN_MIN = 10 * 60 * 1000;
+				for (const q of account.quota) {
+					if (q.timerType !== "7d") continue;
+					const tracker = account.quotaWindows[q.modelKey];
+					if (!tracker) continue;
+					if (tracker.pro.lastSeenAs5h > 0) continue; // has its own direct 5h, don't touch
+					if (tracker.pro.lastSeenAs5hCross > 0 && (now - tracker.pro.lastSeenAs5hCross) > TEN_MIN) {
+						// Cross-inferred Pro is stale — this is now a Free 7d
+						const currentResetMs = q.resetTime ? new Date(q.resetTime).getTime() : 0;
+						tracker.free.lastSeen = now;
+						tracker.free.resetTimeMs = currentResetMs;
+						tracker.free.resetTime = q.resetTime;
+						tracker.free.lastQuota = q.percentRemaining;
+						// Clear stale Pro inference
+						tracker.pro.lastSeen = 0;
+						tracker.pro.lastSeenAs5hCross = 0;
+						tracker.pro.resetTimeMs = 0;
+						tracker.pro.resetTime = null;
+						tracker.pro.lastQuota = -1;
+					}
+				}
+			}
 		} catch {
 			// Network error, skip
 		}
