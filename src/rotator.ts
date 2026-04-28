@@ -321,12 +321,24 @@ export class AccountRotator {
 				const tracker = account.quotaWindows[q.modelKey];
 
 				if (q.timerType === "5h") {
-					// Definitely Pro
-					tracker.pro.lastSeen = now;
-					tracker.pro.lastSeenAs5h = now;
-					tracker.pro.resetTimeMs = currentResetMs;
-					tracker.pro.resetTime = q.resetTime;
-					tracker.pro.lastQuota = q.percentRemaining;
+					// Sanity check: a genuine 5h timer can have AT MOST 5h remaining.
+					// If resetTime is more than 5h 10min from now, Google lied or it's a 7d in disguise.
+					const FIVE_HOURS_10MIN = (5 * 60 + 10) * 60 * 1000;
+					const isGenuine5h = currentResetMs === 0 || (currentResetMs - now) <= FIVE_HOURS_10MIN;
+					if (!isGenuine5h) {
+						// Treat as Free 7d — Google returned a stale/wrong timerType
+						tracker.free.lastSeen = now;
+						tracker.free.resetTimeMs = currentResetMs;
+						tracker.free.resetTime = q.resetTime;
+						tracker.free.lastQuota = q.percentRemaining;
+					} else {
+						// Confirmed Pro 5h
+						tracker.pro.lastSeen = now;
+						tracker.pro.lastSeenAs5h = now;
+						tracker.pro.resetTimeMs = currentResetMs;
+						tracker.pro.resetTime = q.resetTime;
+						tracker.pro.lastQuota = q.percentRemaining;
+					}
 				} else if (q.timerType === "7d") {
 					// Strictly match against recorded Pro resetTime (5 min tolerance)
 					const resetMatchesPro = tracker.pro.resetTimeMs > 0 && Math.abs(currentResetMs - tracker.pro.resetTimeMs) < 300000;
