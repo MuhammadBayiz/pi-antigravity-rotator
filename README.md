@@ -15,6 +15,8 @@ Multi-account rotation proxy for Google Antigravity. Distributes API usage acros
 - **Protective pause** -- Pauses all routing for several hours after serious ToS/abuse-style flags so the rest of the pool is not burned
 - **Token auto-refresh** -- Tokens are refreshed automatically before expiry; no manual management
 - **Endpoint cascade** -- Tries daily, autopush, and prod API endpoints for resilience
+- **Pro Family Advisor** -- Scans your account pool and alerts you if there are major imbalances (like some accounts never getting used because of routing bias), giving you actionable steps to optimize token distribution
+- **Advanced Telemetry & Statistics** -- Track exactly how much USD you save compared to a paid API plan, predict quota depletion with the Forecast grid, view Latency tracking (p50/p95), and explore 60-day historical usage heatmaps
 - **Web dashboard** -- Real-time view of model routing table, per-account quota bars with per-model timers, and flagged account alerts
 - **State persistence** -- Survives restarts; routing assignments, per-model request counters, cooldowns, and flags are saved to disk
 

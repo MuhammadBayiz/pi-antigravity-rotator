@@ -4,45 +4,45 @@ import type { ServerResponse } from "node:http";
 import type { AccountRotator } from "./rotator.js";
 
 export function serveDashboard(res: ServerResponse): void {
-	res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-	res.end(DASHBOARD_HTML);
+  res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+  res.end(DASHBOARD_HTML);
 }
 
 export function serveStatusApi(res: ServerResponse, rotator: AccountRotator): void {
-	res.writeHead(200, {
-		"Content-Type": "application/json",
-		"Access-Control-Allow-Origin": "*",
-	});
-	res.end(JSON.stringify(rotator.getStatus()));
+  res.writeHead(200, {
+    "Content-Type": "application/json",
+    "Access-Control-Allow-Origin": "*",
+  });
+  res.end(JSON.stringify(rotator.getStatus()));
 }
 
 export function serveEnableApi(res: ServerResponse, rotator: AccountRotator, email: string): void {
-	const ok = rotator.enableAccount(email);
-	res.writeHead(ok ? 200 : 409, { "Content-Type": "application/json" });
-	res.end(JSON.stringify({ ok, email }));
+  const ok = rotator.enableAccount(email);
+  res.writeHead(ok ? 200 : 409, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ ok, email }));
 }
 
 export function serveFreshWindowStartsApi(res: ServerResponse, rotator: AccountRotator, enabled: boolean): void {
-	const changed = rotator.setAllowFreshWindowStarts(enabled);
-	res.writeHead(200, { "Content-Type": "application/json" });
-	res.end(JSON.stringify({ ok: true, changed, allowFreshWindowStarts: enabled }));
+  const changed = rotator.setAllowFreshWindowStarts(enabled);
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ ok: true, changed, allowFreshWindowStarts: enabled }));
 }
 
 export function serveAccountFreshWindowStartsApi(
-	res: ServerResponse,
-	rotator: AccountRotator,
-	email: string,
-	enabled: boolean,
+  res: ServerResponse,
+  rotator: AccountRotator,
+  email: string,
+  enabled: boolean,
 ): void {
-	const ok = rotator.setAccountAllowFreshWindowStartsOverride(email, enabled);
-	res.writeHead(ok ? 200 : 404, { "Content-Type": "application/json" });
-	res.end(JSON.stringify({ ok, email, allowFreshWindowStartsOverride: enabled }));
+  const ok = rotator.setAccountAllowFreshWindowStartsOverride(email, enabled);
+  res.writeHead(ok ? 200 : 404, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ ok, email, allowFreshWindowStartsOverride: enabled }));
 }
 
 export function serveClearInFlightApi(res: ServerResponse, rotator: AccountRotator, email: string, modelKey?: string): void {
-	const ok = rotator.clearInFlightRequests(email, modelKey);
-	res.writeHead(ok ? 200 : 404, { "Content-Type": "application/json" });
-	res.end(JSON.stringify({ ok, email, modelKey }));
+  const ok = rotator.clearInFlightRequests(email, modelKey);
+  res.writeHead(ok ? 200 : 404, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ ok, email, modelKey }));
 }
 
 const DASHBOARD_HTML = `<!DOCTYPE html>
@@ -891,6 +891,9 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       <svg viewBox="0 0 24 24"><path d="m5 15 2-9 5 5 5-5 2 9"/><path d="M4 19h16"/></svg>
       <span class="header-icon-badge advisor" id="advisorBadge" style="display:none">0</span>
     </button>
+    <button class="header-icon-btn" id="kofiBtn" onclick="openModal('donationModal')" title="Support the Creator" aria-label="Buy me a coffee" style="color: var(--text);">
+      <svg viewBox="0 0 24 24"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg>
+    </button>
   </div>
 </div>
 
@@ -969,6 +972,31 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       <button class="modal-close" onclick="closeModal(null, 'advisorModal')" aria-label="Close advisor modal">×</button>
     </div>
     <div id="proAdvisor"></div>
+  </div>
+</div>
+
+<div class="modal" id="donationModal" onclick="closeModal(event, 'donationModal')">
+  <div class="modal-card" onclick="event.stopPropagation()" style="max-width: 500px;">
+    <div class="modal-header">
+      <strong>Support the Creator</strong>
+      <button class="modal-close" onclick="closeModal(null, 'donationModal')" aria-label="Close donation modal">×</button>
+    </div>
+    <div style="padding: 16px; font-size: 0.95rem; line-height: 1.5; color: var(--text);">
+      <p style="margin-bottom:12px;font-weight:bold;">❤️ A quick message from Sebastián (extension creator)</p>
+      <p style="margin-bottom:12px;">Hello from Ecuador! I built this tool so that everyone can access AI regardless of their budget.</p>
+      <p style="margin-bottom:12px;">To be completely transparent: I'm going through a very difficult financial situation. Instead of giving up, I'm dedicating all my effort to maintaining and improving this project. If you find the extension useful, a small donation (even $1) means the world to me right now and allows me to put food on the table so I can keep coding.</p>
+      <p style="margin-bottom:12px;">🎁 <strong>Small gift:</strong> As a token of my immense gratitude, by buying me a coffee you'll unlock an automated message with an exclusive "Pro-Tip" (which I haven't published anywhere else) on how to get 240% weekly quota on your accounts for free!</p>
+      <p style="margin-bottom:16px;">If you're short on cash, I completely understand, but please keep using it for free! But if you can lend me a hand today, I'd be incredibly grateful:</p>
+      <div style="text-align: center; margin-bottom: 24px;">
+        <a href="https://ko-fi.com/tuxevil" target="_blank" style="display:inline-flex;flex-direction:column;align-items:center;background-color:#FF5E5B;color:white;padding:12px 24px;border-radius:6px;text-decoration:none;transition:opacity 0.2s;" onmouseover="this.style.opacity='0.9'" onmouseout="this.style.opacity='1'">
+          <span style="font-weight:bold;font-size:1.1rem;">☕ Buy me a coffee on Ko-fi</span>
+          <span style="font-size:0.9rem;margin-top:4px;opacity:0.9;">ko-fi.com/tuxevil</span>
+        </a>
+      </div>
+      <div style="text-align: center;">
+        <button class="btn-secondary" onclick="hideDonationModalPermanently()">I've supported or prefer not to see this</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -2109,12 +2137,24 @@ document.addEventListener('keydown', function(event) {
   if (event.key === 'Escape') {
     closeModal(null, 'attentionModal');
     closeModal(null, 'advisorModal');
+    closeModal(null, 'donationModal');
   }
 });
+
+function hideDonationModalPermanently() {
+  localStorage.setItem('hideDonationPopup', 'true');
+  closeModal(null, 'donationModal');
+}
 
 refresh();
 connectSSE();
 setInterval(refresh, 15000); // fallback poll every 15s in case SSE drops
+
+if (!localStorage.getItem('hideDonationPopup')) {
+  setTimeout(function() {
+    openModal('donationModal');
+  }, 1000);
+}
 </script>
 </body>
 </html>`;

@@ -1,6 +1,26 @@
 # Changelog
 
-## [Unreleased]
+## [1.5.0] - 2026-04-28
+
+### Added
+- **Pro Family Advisor**: A new smart assistant in the dashboard that scans your account pool and alerts you if there are routing imbalances or underutilized accounts, giving actionable steps to fix them.
+- **Advanced Telemetry & Statistics**:
+  - Estimated API Savings ($USD) to track how much money the tool saves you.
+  - Latency tracking (p50/p95) per model to detect degraded accounts.
+  - Quota Forecast grid predicting when each model will exhaust its quota based on current burn rate.
+  - Searchable Request Log directly in the dashboard.
+  - 60-day historical usage Heatmap.
+  - Data export to CSV and JSON formats.
+- **Creator Support**: Added a Ko-fi donation modal and header button to support the maintainer.
+
+## [1.4.24] - 2026-04-28
+
+## [1.4.21] - 2026-04-28
+
+### Changed
+- **Dual-Window Architecture**: Completely rewrote the dual-window tracker to use immutable, permanent anchors. Anchors are never deleted, only refreshed when their physical date expires.
+- **Dual-Window Logic**: A timer is classified strictly by matching its reset date against the permanent Pro or Free anchors. New anchors are assigned to Pro ONLY if a genuine 5h timer is present, otherwise they default to Free.
+- **Manual Anchor Override**: Added a UI button in the dashboard to manually swap Pro and Free anchors for a model, giving users absolute control to correct the state if Google's API behavior causes a misclassification.
 
 ## [1.4.11] - 2026-04-28
 
