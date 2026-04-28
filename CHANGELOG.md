@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.4.11] - 2026-04-28
+
+### Fixed
+- **Dual-Window Recharging Logic**: The dashboard now correctly distinguishes between expired 5h timers (which grant +40% quota) and expired 7d timers (which grant 100% quota) when visually projecting available capacity.
+
 ## [1.4.10] - 2026-04-28
 
 ### Changed

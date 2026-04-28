@@ -1048,9 +1048,15 @@ function renderDualWindows(account) {
         if (pRemain > 0) {
           pReset = 'resets in ' + formatDuration(pRemain);
         } else {
-          // Reset has passed — assume 100% recharged
-          pQuota = 100;
-          pReset = '<span style="color:var(--green)">ready</span>';
+          // Reset has passed
+          var was5h = (t.pro.resetTimeMs - t.pro.lastSeen) < (24 * 3600 * 1000);
+          if (was5h) {
+            pQuota = Math.min(100, pQuota + 40);
+            pReset = '<span style="color:var(--green)">+40% ready</span>';
+          } else {
+            pQuota = 100;
+            pReset = '<span style="color:var(--green)">100% ready</span>';
+          }
         }
       }
       var pqColor = pQuota > 50 ? 'var(--green)' : pQuota > 20 ? 'var(--yellow)' : 'var(--red)';
@@ -1072,9 +1078,15 @@ function renderDualWindows(account) {
         if (fRemain > 0) {
           fReset = 'resets in ' + formatDuration(fRemain);
         } else {
-          // Reset has passed — assume 100% recharged
-          fQuota = 100;
-          fReset = '<span style="color:var(--green)">ready</span>';
+          // Reset has passed
+          var fWas5h = (t.free.resetTimeMs - t.free.lastSeen) < (24 * 3600 * 1000);
+          if (fWas5h) {
+            fQuota = Math.min(100, fQuota + 40);
+            fReset = '<span style="color:var(--green)">+40% ready</span>';
+          } else {
+            fQuota = 100;
+            fReset = '<span style="color:var(--green)">100% ready</span>';
+          }
         }
       }
       var fqColor = fQuota > 50 ? 'var(--green)' : fQuota > 20 ? 'var(--yellow)' : 'var(--red)';
