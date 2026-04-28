@@ -1038,33 +1038,49 @@ function renderDualWindows(account) {
     var shortName = modelKey.split('-').slice(0, 2).join('-');
     var proLine = '';
     var freeLine = '';
+
+    // PRO line
     if (t.pro && t.pro.lastSeen > 0) {
-      var pqColor = t.pro.lastQuota > 50 ? 'var(--green)' : t.pro.lastQuota > 20 ? 'var(--yellow)' : 'var(--red)';
+      var pQuota = t.pro.lastQuota;
       var pReset = '';
       if (t.pro.resetTimeMs > 0) {
         var pRemain = t.pro.resetTimeMs - now;
-        if (pRemain > 0) pReset = 'resets in ' + formatDuration(pRemain);
-        else pReset = 'reset ' + formatDuration(-pRemain) + ' ago ✓';
+        if (pRemain > 0) {
+          pReset = 'resets in ' + formatDuration(pRemain);
+        } else {
+          // Reset has passed — assume 100% recharged
+          pQuota = 100;
+          pReset = '<span style="color:var(--green)">ready</span>';
+        }
       }
+      var pqColor = pQuota > 50 ? 'var(--green)' : pQuota > 20 ? 'var(--yellow)' : 'var(--red)';
       proLine = '<div class="dw-row">' +
         '<span class="dw-badge dw-badge-pro">PRO</span>' +
-        '<span class="dw-quota" style="color:' + pqColor + '">' + t.pro.lastQuota + '%</span>' +
+        '<span class="dw-quota" style="color:' + pqColor + '">' + pQuota + '%</span>' +
         '<span class="dw-reset">' + (pReset || '--') + '</span>' +
       '</div>';
     } else {
       proLine = '<div class="dw-row"><span class="dw-badge dw-badge-pro">PRO</span><span class="dw-empty">no data</span></div>';
     }
+
+    // FREE line
     if (t.free && t.free.lastSeen > 0) {
-      var fqColor = t.free.lastQuota > 50 ? 'var(--green)' : t.free.lastQuota > 20 ? 'var(--yellow)' : 'var(--red)';
+      var fQuota = t.free.lastQuota;
       var fReset = '';
       if (t.free.resetTimeMs > 0) {
         var fRemain = t.free.resetTimeMs - now;
-        if (fRemain > 0) fReset = 'resets in ' + formatDuration(fRemain);
-        else fReset = 'reset ' + formatDuration(-fRemain) + ' ago ✓';
+        if (fRemain > 0) {
+          fReset = 'resets in ' + formatDuration(fRemain);
+        } else {
+          // Reset has passed — assume 100% recharged
+          fQuota = 100;
+          fReset = '<span style="color:var(--green)">ready</span>';
+        }
       }
+      var fqColor = fQuota > 50 ? 'var(--green)' : fQuota > 20 ? 'var(--yellow)' : 'var(--red)';
       freeLine = '<div class="dw-row">' +
         '<span class="dw-badge dw-badge-free">FREE</span>' +
-        '<span class="dw-quota" style="color:' + fqColor + '">' + t.free.lastQuota + '%</span>' +
+        '<span class="dw-quota" style="color:' + fqColor + '">' + fQuota + '%</span>' +
         '<span class="dw-reset">' + (fReset || '--') + '</span>' +
       '</div>';
     } else {

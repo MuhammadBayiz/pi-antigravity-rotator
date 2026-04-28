@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.4.10] - 2026-04-28
+
+### Changed
+- **Dual-Window Display**: The dashboard now automatically assumes 100% quota and displays "ready" in green for dual-window timers whose reset dates have already passed, eliminating the need to manually compute past reset timestamps.
+
 ## [1.4.8] - 2026-04-28
 
 ### Fixed
