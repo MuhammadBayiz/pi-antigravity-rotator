@@ -866,7 +866,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 
 <div class="routing-panel" id="heatmapPanel" style="margin-top:12px;display:none">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-    <strong>Activity Heatmap (last 7d)</strong>
+    <strong>Activity Heatmap (last 30d)</strong>
     <span style="color:var(--text-dim);font-size:0.75rem">rows: hour · cols: day</span>
   </div>
   <div id="heatmapGrid"></div>
@@ -1400,12 +1400,14 @@ function renderHeatmap(tokenUsage) {
   var hours = tokenUsage.hours || [];
   var minutes = tokenUsage.minutes || [];
   var now = new Date();
+  var daysCount = 30;
   var days = [];
-  for (var i = 6; i >= 0; i--) {
+  for (var i = daysCount - 1; i >= 0; i--) {
     var d = new Date(now);
     d.setDate(now.getDate() - i);
     var key = d.toISOString().slice(0, 10);
-    days.push({ key: key, label: key.slice(5) });
+    // show label only for every 3rd day to avoid crowding
+    days.push({ key: key, label: (i % 3 === 0) ? key.slice(5) : '' });
   }
 
   var cellMap = {}; // day|hour -> requests
@@ -1447,17 +1449,17 @@ function renderHeatmap(tokenUsage) {
     return 'rgba(56,189,248,0.92)';
   }
 
-  var html = '<div style="overflow-x:auto"><table style="border-collapse:separate;border-spacing:3px;font-family:JetBrains Mono,monospace;font-size:0.7rem">';
-  html += '<tr><th style="color:var(--text-dim);padding-right:6px">h</th>';
-  days.forEach(function(d) { html += '<th style="color:var(--text-dim);font-weight:500">' + d.label + '</th>'; });
+  var html = '<div style="overflow-x:auto"><table style="width:100%;min-width:600px;border-collapse:separate;border-spacing:2px;font-family:JetBrains Mono,monospace;font-size:0.6rem">';
+  html += '<tr><th style="color:var(--text-dim);padding-right:6px;width:20px">h</th>';
+  days.forEach(function(d) { html += '<th style="color:var(--text-dim);font-weight:500;text-align:center">' + d.label + '</th>'; });
   html += '</tr>';
 
   for (var hour = 23; hour >= 0; hour--) {
-    html += '<tr><td style="color:var(--text-dim);padding-right:6px">' + String(hour).padStart(2, '0') + '</td>';
+    html += '<tr><td style="color:var(--text-dim);padding-right:6px;text-align:right">' + String(hour).padStart(2, '0') + '</td>';
     for (var j = 0; j < days.length; j++) {
       var day = days[j].key;
       var val = cellMap[day + '|' + hour] || 0;
-      html += '<td title="' + day + ' ' + String(hour).padStart(2, '0') + ':00 · ' + val + ' req" style="width:13px;height:13px;border-radius:3px;background:' + colorFor(val) + ';border:1px solid rgba(255,255,255,0.08)"></td>';
+      html += '<td title="' + day + ' ' + String(hour).padStart(2, '0') + ':00 · ' + val + ' req" style="height:14px;border-radius:2px;background:' + colorFor(val) + ';border:1px solid rgba(255,255,255,0.05)"></td>';
     }
     html += '</tr>';
   }

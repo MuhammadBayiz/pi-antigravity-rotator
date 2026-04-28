@@ -720,7 +720,7 @@ export class AccountRotator {
 	private consolidateTokenBuckets(now: Date): void {
 		const nowMs = now.getTime();
 		const KEEP_MINUTES_MS = 120 * 60 * 1000;  // keep 2h of minutes
-		const KEEP_HOURS_MS = 48 * 3600 * 1000;   // keep 48h of hours
+		const KEEP_HOURS_MS = 30 * 86400 * 1000;  // keep 30d of hours
 		const KEEP_DAYS_MS = 60 * 86400 * 1000;   // keep 60d of days
 
 		// Helper: parse period string to epoch ms (approximate, enough for cutoff)
