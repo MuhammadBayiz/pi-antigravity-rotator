@@ -1098,15 +1098,16 @@ function renderDualWindows(account) {
     } else {
       freeLine = '<div class="dw-row"><span class="dw-badge dw-badge-free">FREE</span><span class="dw-empty">no data</span></div>';
     }
-    
-    var swapBtn = '<button class="btn-clear-flight" style="margin-left:auto" onclick="swapWindows(\\'' + account.email + '\\', \\'' + modelKey + '\\')">Swap</button>';
 
     return '<div class="dw-model">' +
-      '<div class="dw-model-name" style="display:flex;align-items:center">' + shortName + swapBtn + '</div>' +
+      '<div class="dw-model-name">' + shortName + '</div>' +
       proLine + freeLine +
     '</div>';
   }).join('');
-  return '<div class="dw-section"><div class="dw-title">Quota Windows (Pro / Free)</div>' + rows + '</div>';
+  
+  var swapAllBtn = '<button class="btn-clear-flight" style="margin-left:auto;font-size:8px;padding:1px 4px" title="Manually swap Pro/Free classification for this entire account" onclick="swapWindows(\\'' + account.email + '\\')">Swap All</button>';
+  
+  return '<div class="dw-section"><div class="dw-title" style="display:flex;align-items:center">Quota Windows (Pro / Free)' + swapAllBtn + '</div>' + rows + '</div>';
 }
 
 function renderAccounts(data) {
@@ -2008,9 +2009,9 @@ async function clearInFlight(email, modelKey) {
   refresh();
 }
 
-async function swapWindows(email, modelKey) {
-  if (!confirm('Manually swap Pro and Free data for ' + modelKey + '? Use this only if you know the algorithm classified the timers backward.')) return;
-  await fetch('/api/account/swap-windows/' + encodeURIComponent(email) + '/' + encodeURIComponent(modelKey), { method: 'POST' });
+async function swapWindows(email) {
+  if (!confirm('Manually swap Pro and Free data for ALL models on this account? Use this only if the algorithm classified the account tier backward.')) return;
+  await fetch('/api/account/swap-windows/' + encodeURIComponent(email), { method: 'POST' });
   refresh();
 }
 
