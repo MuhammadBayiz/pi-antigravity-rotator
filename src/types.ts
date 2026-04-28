@@ -112,6 +112,7 @@ export interface AccountRuntime {
 	inFlightRequests: number;
 	inFlightByModel: Record<string, number>;
 	allowFreshWindowStartsOverride: boolean;
+	quotaWindows: QuotaWindowHistory;
 }
 
 // Per-model rotation state tracked by the rotator
@@ -122,6 +123,23 @@ export interface ModelRotationState {
 }
 
 // Persisted state across restarts
+export interface QuotaWindowInfo {
+	lastSeen: number;           // timestamp of last observation
+	resetTimeMs: number;        // epoch ms of the resetTime
+	resetTime: string | null;   // ISO string for display
+	lastQuota: number;          // percentRemaining when last seen
+}
+
+export interface DualWindowTracker {
+	pro: QuotaWindowInfo & {
+		lastSeenAs5h: number;   // timestamp when last seen with 5h timer specifically
+	};
+	free: QuotaWindowInfo;
+}
+
+// Per-account quota window tracking: keyed by model key
+export type QuotaWindowHistory = Record<string, DualWindowTracker>;
+
 export interface PersistedState {
 	// Per-model active account index
 	modelAccounts: Record<string, number>;
@@ -142,6 +160,7 @@ export interface PersistedState {
 			disabled: boolean;
 			flagged: boolean;
 			allowFreshWindowStartsOverride?: boolean;
+			quotaWindows?: QuotaWindowHistory;
 		}
 	>;
 }
@@ -204,6 +223,7 @@ export interface AccountStatus {
 	inFlightByModel: Record<string, number>;
 	// Pro family sharing
 	proDetected: boolean;
+	quotaWindows: QuotaWindowHistory;
 	familyManager: boolean;
 	allowFreshWindowStartsOverride: boolean;
 	effectiveFreshWindowStartsAllowed: boolean;

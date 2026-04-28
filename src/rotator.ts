@@ -10,6 +10,8 @@ import {
 	type ModelQuota,
 	type ModelRotationState,
 	type PersistedState,
+	type QuotaWindowHistory,
+	type DualWindowTracker,
 	type ProAdvisorAction,
 	type StatusResponse,
 	type TokenBucket,
@@ -74,6 +76,7 @@ export class AccountRotator {
 			inFlightRequests: 0,
 			inFlightByModel: {},
 			allowFreshWindowStartsOverride: false,
+			quotaWindows: {},
 		}));
 	}
 
@@ -113,7 +116,8 @@ export class AccountRotator {
 					account.quotaExhaustedAt = saved.quotaExhaustedAt;
 					account.disabled = saved.disabled;
 					account.flagged = saved.flagged ?? false;
-					account.allowFreshWindowStartsOverride = saved.allowFreshWindowStartsOverride ?? false;
+				account.allowFreshWindowStartsOverride = saved.allowFreshWindowStartsOverride ?? false;
+					account.quotaWindows = saved.quotaWindows ?? {};
 				}
 			}
 			// Cap any stale cooldowns to 30 min max from now
@@ -186,6 +190,7 @@ export class AccountRotator {
 				disabled: account.disabled,
 				flagged: account.flagged,
 				allowFreshWindowStartsOverride: account.allowFreshWindowStartsOverride,
+					quotaWindows: account.quotaWindows,
 			};
 		}
 			try {
@@ -296,6 +301,74 @@ export class AccountRotator {
 			const data = (await response.json()) as GoogleQuotaResponse;
 			account.quota = this.extractQuotas(data);
 			account.lastQuotaPoll = Date.now();
+
+			// Record dual-window quota tracking per model
+			const now = Date.now();
+			const SIX_HOURS_MS = 6 * 3600 * 1000;
+			const ONE_HOUR_MS = 3600 * 1000;
+
+			for (const q of account.quota) {
+				const currentResetMs = q.resetTime ? new Date(q.resetTime).getTime() : 0;
+
+				// Initialize tracker if missing
+				if (!account.quotaWindows[q.modelKey]) {
+					account.quotaWindows[q.modelKey] = {
+						pro: { lastSeen: 0, lastSeenAs5h: 0, resetTimeMs: 0, resetTime: null, lastQuota: -1 },
+						free: { lastSeen: 0, resetTimeMs: 0, resetTime: null, lastQuota: -1 },
+					};
+				}
+				const tracker = account.quotaWindows[q.modelKey];
+
+				if (q.timerType === "5h") {
+					// Always Pro
+					tracker.pro.lastSeen = now;
+					tracker.pro.lastSeenAs5h = now;
+					tracker.pro.resetTimeMs = currentResetMs;
+					tracker.pro.resetTime = q.resetTime;
+					tracker.pro.lastQuota = q.percentRemaining;
+				} else if (q.timerType === "7d") {
+					// Determine: is this Pro 7d or Free 7d?
+					const recentlyWas5h = tracker.pro.lastSeenAs5h > 0 && (now - tracker.pro.lastSeenAs5h) < SIX_HOURS_MS;
+					const resetMatchesPro = tracker.pro.resetTimeMs > 0 && Math.abs(currentResetMs - tracker.pro.resetTimeMs) < ONE_HOUR_MS;
+
+					if (recentlyWas5h && !resetMatchesPro) {
+						// Just transitioned from 5h to 7d (resetTime changed) — this is Pro 7d
+						tracker.pro.lastSeen = now;
+						tracker.pro.resetTimeMs = currentResetMs;
+						tracker.pro.resetTime = q.resetTime;
+						tracker.pro.lastQuota = q.percentRemaining;
+					} else if (resetMatchesPro) {
+						// Same Pro 7d timer we've been tracking
+						tracker.pro.lastSeen = now;
+						tracker.pro.lastQuota = q.percentRemaining;
+					} else {
+						// Different resetTime — this is Free 7d
+						tracker.free.lastSeen = now;
+						tracker.free.resetTimeMs = currentResetMs;
+						tracker.free.resetTime = q.resetTime;
+						tracker.free.lastQuota = q.percentRemaining;
+					}
+				}
+				// fresh: no timer active, don't update either window
+			}
+
+			// Cross-model Pro correlation: if ANY model shows 5h, the entire account is Pro.
+			// So any other model showing 7d right now is actually a Pro 7d, not Free.
+			const anyModelIs5h = account.quota.some((q) => q.timerType === "5h");
+			if (anyModelIs5h) {
+				for (const q of account.quota) {
+					if (q.timerType === "7d") {
+						const tracker = account.quotaWindows[q.modelKey];
+						if (tracker) {
+							const currentResetMs = q.resetTime ? new Date(q.resetTime).getTime() : 0;
+							tracker.pro.lastSeen = now;
+							tracker.pro.resetTimeMs = currentResetMs;
+							tracker.pro.resetTime = q.resetTime;
+							tracker.pro.lastQuota = q.percentRemaining;
+						}
+					}
+				}
+			}
 		} catch {
 			// Network error, skip
 		}
@@ -1108,6 +1181,7 @@ export class AccountRotator {
 					inFlightRequests: a.inFlightRequests,
 					inFlightByModel: a.inFlightByModel,
 					proDetected: this.isProAccount(a),
+					quotaWindows: a.quotaWindows,
 				familyManager: !!a.config.familyManager,
 				allowFreshWindowStartsOverride: a.allowFreshWindowStartsOverride,
 				effectiveFreshWindowStartsAllowed: this.isEffectiveFreshWindowAllowed(a),
@@ -1174,6 +1248,7 @@ export class AccountRotator {
 					inFlightRequests: 0,
 					inFlightByModel: {},
 				allowFreshWindowStartsOverride: false,
+					quotaWindows: {},
 			};
 			this.accounts.push(runtime);
 			this.config.accounts.push(runtime.config);
@@ -1218,8 +1293,53 @@ export class AccountRotator {
 	// Model keys relevant for Pro advisor decisions (ignore Flash)
 	private static PRO_ADVISOR_MODELS = ["gemini-3.1-pro", "claude-opus-4-6-thinking"];
 
+	/**
+	 * Check if a model's current 7d timer is the Pro cooldown (not Free).
+	 * Uses the dual-window tracker: compares current resetTime against recorded Pro resetTime.
+	 */
+	private isProOriginatedTimer(account: AccountRuntime, modelKey: string): boolean {
+		const tracker = account.quotaWindows[modelKey];
+		if (!tracker || tracker.pro.lastSeen === 0) return false;
+		const currentQuota = account.quota.find(
+			(q) => q.modelKey.includes(modelKey) || modelKey.includes(q.modelKey),
+		);
+		if (!currentQuota || currentQuota.timerType !== "7d") return false;
+		const currentResetMs = currentQuota.resetTime ? new Date(currentQuota.resetTime).getTime() : 0;
+		// Match if current resetTime is within 1h of recorded Pro resetTime
+		return tracker.pro.resetTimeMs > 0 && Math.abs(currentResetMs - tracker.pro.resetTimeMs) < 3600000;
+	}
+
+	/**
+	 * An account is "Pro" if:
+	 * 1. It currently has a 5h timer on any model (active Pro window), OR
+	 * 2. It has a 7d timer that matches the recorded Pro resetTime (Pro cooldown)
+	 */
 	private isProAccount(account: AccountRuntime): boolean {
-		return account.quota.some((q) => q.timerType === "5h");
+		if (account.quota.some((q) => q.timerType === "5h")) return true;
+		return AccountRotator.PRO_ADVISOR_MODELS.some((m) => this.isProOriginatedTimer(account, m));
+	}
+
+	/**
+	 * Get the "other" window's quota info for an account/model.
+	 * If currently showing Pro timer → returns Free window data (and vice versa).
+	 */
+	private getAlternateWindow(account: AccountRuntime, modelKey: string): { type: "pro" | "free"; quota: number; resetTimeMs: number; resetTime: string | null } | null {
+		const tracker = account.quotaWindows[modelKey];
+		if (!tracker) return null;
+		const currentQuota = account.quota.find(
+			(q) => q.modelKey.includes(modelKey) || modelKey.includes(q.modelKey),
+		);
+		if (!currentQuota) return null;
+
+		if (this.isProOriginatedTimer(account, modelKey) || currentQuota.timerType === "5h") {
+			// Currently on Pro — return Free window
+			if (tracker.free.lastSeen === 0) return null;
+			return { type: "free", quota: tracker.free.lastQuota, resetTimeMs: tracker.free.resetTimeMs, resetTime: tracker.free.resetTime };
+		} else {
+			// Currently on Free — return Pro window
+			if (tracker.pro.lastSeen === 0) return null;
+			return { type: "pro", quota: tracker.pro.lastQuota, resetTimeMs: tracker.pro.resetTimeMs, resetTime: tracker.pro.resetTime };
+		}
 	}
 
 	private getProAdvisor(): StatusResponse["proAdvisor"] {
@@ -1229,6 +1349,7 @@ export class AccountRotator {
 		const actions: ProAdvisorAction[] = [];
 
 		// Suggest "remove-pro" for Pro accounts (not family manager) with 0% on all advisor models
+		// BUT only if the 7d timer is NOT a Pro-originated cooldown (those should stay in Pro family)
 		for (const account of proAccounts) {
 			if (account.config.familyManager) continue;
 			const advisorQuotas = account.quota.filter((q) =>
@@ -1236,60 +1357,131 @@ export class AccountRotator {
 			);
 			if (advisorQuotas.length === 0) continue;
 			const allExhausted = advisorQuotas.every((q) => q.percentRemaining === 0);
-			if (allExhausted) {
+			if (!allExhausted) continue;
+
+			// Check if any advisor model has a Pro-originated 7d timer (still in Pro cooldown)
+			const hasProCooldown = AccountRotator.PRO_ADVISOR_MODELS.some((m) =>
+				this.isProOriginatedTimer(account, m),
+			);
+
+			if (hasProCooldown) {
+				// Don't remove — it's in Pro cooldown. Find the soonest reset.
+				let soonestResetLabel = "";
+				for (const m of AccountRotator.PRO_ADVISOR_MODELS) {
+					const h = account.quotaWindows[m];
+					if (h && h.pro.resetTimeMs > Date.now()) {
+						const ms = h.pro.resetTimeMs - Date.now();
+						soonestResetLabel = `${Math.floor(ms / 3600000)}h${Math.floor((ms % 3600000) / 60000)}m`;
+						break;
+					}
+				}
+				// Inform but don't action
 				actions.push({
 					type: "remove-pro",
 					email: account.config.email,
 					label: account.config.label || account.config.email,
-					reason: "Pro quota exhausted on G3Pro and Claude",
+					reason: `Pro 0% but in Pro cooldown (7d timer is Pro-originated)${soonestResetLabel ? `, resets in ${soonestResetLabel}` : ""}. Keep in Pro family.`,
+				});
+			} else {
+				// Truly exhausted with no Pro cooldown — safe to remove
+				actions.push({
+					type: "remove-pro",
+					email: account.config.email,
+					label: account.config.label || account.config.email,
+					reason: "Pro quota exhausted, no Pro cooldown active — safe to remove from Pro family",
 				});
 			}
 		}
 
-		// Suggest "add-pro" for Free accounts with 0% quota and long reset, if slots available
+		// Suggest "add-pro" for accounts where Pro window has quota available (or reset passed)
 		const slotsAvailable = maxSlots - currentProCount + actions.filter((a) => a.type === "remove-pro").length;
 		if (slotsAvailable > 0) {
-			const candidates: { account: AccountRuntime; maxResetMs: number }[] = [];
+			const candidates: { account: AccountRuntime; priority: number; reason: string }[] = [];
+			const now = Date.now();
 
 			for (const account of this.accounts) {
 				if (account.disabled || account.flagged) continue;
 				if (this.isProAccount(account)) continue;
+				// Skip if already recommended for removal above
+				if (candidates.some((c) => c.account === account)) continue;
 
+				for (const modelKey of AccountRotator.PRO_ADVISOR_MODELS) {
+					const alt = this.getAlternateWindow(account, modelKey);
+					if (!alt || alt.type !== "pro") continue;
+
+					if (alt.resetTimeMs > 0 && alt.resetTimeMs <= now) {
+						// Pro reset has passed — fresh Pro tokens likely available
+						const agoMs = now - alt.resetTimeMs;
+						const agoH = Math.floor(agoMs / 3600000);
+						const agoM = Math.floor((agoMs % 3600000) / 60000);
+						candidates.push({
+							account,
+							priority: 0, // highest: reset already passed
+							reason: `Pro reset on ${modelKey} passed ${agoH}h${agoM}m ago — fresh Pro tokens available`,
+						});
+						break;
+					}
+
+					if (alt.quota > 0) {
+						// Pro window still has quota remaining
+						candidates.push({
+							account,
+							priority: 1, // high: has existing Pro quota
+							reason: `Pro window on ${modelKey} has ${alt.quota}% remaining`,
+						});
+						break;
+					}
+
+					if (alt.resetTimeMs > now) {
+						// Pro reset is upcoming
+						const untilMs = alt.resetTimeMs - now;
+						const untilH = Math.floor(untilMs / 3600000);
+						const untilM = Math.floor((untilMs % 3600000) / 60000);
+						candidates.push({
+							account,
+							priority: 2 + untilMs / 86400000, // lower priority the further away
+							reason: `Pro on ${modelKey} resets in ${untilH}h${untilM}m`,
+						});
+						break;
+					}
+				}
+
+				// Also check: currently Free, and Free quota is low — suggest switching to Pro
 				const advisorQuotas = account.quota.filter((q) =>
 					AccountRotator.PRO_ADVISOR_MODELS.some((m) => q.modelKey.includes(m) || m.includes(q.modelKey)),
 				);
 				if (advisorQuotas.length === 0) continue;
+				if (candidates.some((c) => c.account === account)) continue;
 
-				// Only suggest if at least one advisor model is at 0%
 				const hasExhausted = advisorQuotas.some((q) => q.percentRemaining === 0);
 				if (!hasExhausted) continue;
 
-				// Find the longest reset time among exhausted models
 				let maxResetMs = 0;
 				for (const q of advisorQuotas) {
 					if (q.percentRemaining === 0 && q.resetTime) {
-						const resetMs = new Date(q.resetTime).getTime() - Date.now();
+						const resetMs = new Date(q.resetTime).getTime() - now;
 						if (resetMs > maxResetMs) maxResetMs = resetMs;
 					}
 				}
 
-				// Only suggest if reset is > 24h away (otherwise not worth the Pro slot)
-				if (maxResetMs > 24 * 60 * 60 * 1000) {
-					candidates.push({ account, maxResetMs });
+				if (maxResetMs > 24 * 3600000) {
+					candidates.push({
+						account,
+						priority: 10 + maxResetMs / 86400000,
+						reason: `Free 0%, resets in ${Math.floor(maxResetMs / 86400000)}d ${Math.floor((maxResetMs % 86400000) / 3600000)}h`,
+					});
 				}
 			}
 
-			// Sort by longest reset time first (maximizes benefit)
-			candidates.sort((a, b) => b.maxResetMs - a.maxResetMs);
+			// Sort by priority (lowest = most urgent)
+			candidates.sort((a, b) => a.priority - b.priority);
 
-			for (const { account, maxResetMs } of candidates.slice(0, slotsAvailable)) {
-				const days = Math.floor(maxResetMs / (24 * 60 * 60 * 1000));
-				const hours = Math.floor((maxResetMs % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
+			for (const { account, reason } of candidates.slice(0, slotsAvailable)) {
 				actions.push({
 					type: "add-pro",
 					email: account.config.email,
 					label: account.config.label || account.config.email,
-					reason: `0% quota, resets in ${days}d ${hours}h`,
+					reason,
 				});
 			}
 		}

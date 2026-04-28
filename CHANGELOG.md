@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [1.4.6] - 2026-04-28
+
+### Added
+- **Dual-Window Quota Tracking**: Pro Family Advisor now simultaneously tracks both Free and Pro quota windows for the same account. It correctly identifies whether a 7-day timer is a Free tier reset or a Pro tier cooldown by correlating reset times.
+- **Cross-Model Pro Correlation**: If any model on an account shows a 5h (Pro) timer, the rotator now intelligently infers that all other models on that account are also currently Pro, even if they are in their 7d cooldown phase.
+
 ## [1.4.5] - 2026-04-28
 
 ### Added
