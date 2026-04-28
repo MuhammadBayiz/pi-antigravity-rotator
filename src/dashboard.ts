@@ -584,6 +584,8 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     font-family: var(--font);
     font-weight: 500;
   }
+  .btn-sm { padding: 2px 8px; font-size: 10px; }
+  .btn-sm.active { background: var(--accent); color: #000; border-color: var(--accent); }
   .health-grid {
     display:grid;
     grid-template-columns: repeat(auto-fit, minmax(124px, 1fr));
@@ -832,7 +834,52 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 
 <div class="routing-panel state-stopped" id="routingHealth"></div>
 
+<div class="routing-panel" id="tokenUsagePanel" style="margin-top:12px">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <strong>Token Usage</strong>
+    <div style="display:flex;gap:6px;align-items:center">
+      <div id="tokenTotals" style="font-family:JetBrains Mono,monospace;font-size:0.85rem;color:var(--text-dim);margin-right:12px"></div>
+      <button class="btn-secondary btn-sm" onclick="setTokenView('1h')" id="tbtn-1h">1h</button>
+      <button class="btn-secondary btn-sm" onclick="setTokenView('1d')" id="tbtn-1d">1d</button>
+      <button class="btn-secondary btn-sm" onclick="setTokenView('7d')" id="tbtn-7d">7d</button>
+      <button class="btn-secondary btn-sm" onclick="setTokenView('1m')" id="tbtn-1m">1m</button>
+    </div>
+  </div>
+  <div id="tokenChart" style="width:100%;overflow-x:auto"></div>
+  <div id="tokenLegend" style="margin-top:8px;display:flex;gap:16px;flex-wrap:wrap;font-size:0.8rem"></div>
+</div>
+
+<div class="routing-panel" id="latencyPanel" style="margin-top:12px;display:none">
+  <strong>Latency (last 200 requests)</strong>
+  <div id="latencyGrid" style="margin-top:8px"></div>
+</div>
+
+<div class="routing-panel" id="forecastPanel" style="margin-top:12px;display:none">
+  <strong>Quota Forecast</strong>
+  <div id="forecastGrid" style="margin-top:8px"></div>
+</div>
+
 <div class="accounts-grid" id="accounts"></div>
+
+<div class="routing-panel" id="heatmapPanel" style="margin-top:12px;display:none">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+    <strong>Activity Heatmap (last 7d)</strong>
+    <span style="color:var(--text-dim);font-size:0.75rem">rows: hour · cols: day</span>
+  </div>
+  <div id="heatmapGrid"></div>
+</div>
+
+<div class="routing-panel" id="requestLogPanel" style="margin-top:12px;display:none">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+    <strong>Request Log</strong>
+    <div style="display:flex;gap:6px">
+      <input id="logFilterModel" placeholder="model" style="background:var(--card-bg);border:1px solid var(--border);color:var(--text);padding:2px 6px;border-radius:4px;font-size:0.75rem;width:100px" />
+      <input id="logFilterAccount" placeholder="account" style="background:var(--card-bg);border:1px solid var(--border);color:var(--text);padding:2px 6px;border-radius:4px;font-size:0.75rem;width:100px" />
+      <input id="logFilterStatus" placeholder="status" style="background:var(--card-bg);border:1px solid var(--border);color:var(--text);padding:2px 6px;border-radius:4px;font-size:0.75rem;width:60px" />
+    </div>
+  </div>
+  <div id="requestLogGrid" style="max-height:320px;overflow-y:auto"></div>
+</div>
 
 <div class="events-panel" id="recentEventsPanel" style="display:none"></div>
 
@@ -912,6 +959,7 @@ function renderQuotaBars(account) {
 }
 
 function renderAccounts(data) {
+  window.__lastData = data;
   var now = Date.now();
   document.getElementById('uptime').textContent = formatDuration(data.uptime);
   document.getElementById('port').textContent = data.proxyPort;
@@ -964,6 +1012,9 @@ function renderAccounts(data) {
     healthGrid +
     '<div class="ops-buttons">' +
       '<button class="btn-secondary" onclick="refresh()">Refresh</button>' +
+      '<button class="btn-secondary" onclick="toggleFlagged()">' +
+        (window.__hideFlagged ? 'Show Flagged' : 'Hide Flagged') +
+      '</button>' +
       '<button class="btn-secondary" onclick="setFreshWindowStarts(' + (!controls.allowFreshWindowStarts) + ')">' +
         (controls.allowFreshWindowStarts ? 'Block Fresh Windows' : 'Allow Fresh Windows') +
       '</button>' +
@@ -971,10 +1022,18 @@ function renderAccounts(data) {
     '<div class="ops-warning">' + freshPolicyHint + '</div>';
 
   renderAttentionPanel(data);
+  renderTokenChart(data.tokenUsage);
+  renderHeatmap(data.tokenUsage);
+  renderLatencyPanel(data.latencyStats);
+  renderForecastPanel(data);
+  renderRequestLog(data.requestLog);
   renderRecentEvents(data.recentEvents);
 
   var container = document.getElementById('accounts');
-  var sorted = data.accounts.slice().sort(function(a, b) {
+  var hideFlagged = window.__hideFlagged || false;
+  var sorted = data.accounts.slice()
+    .filter(function(a) { return !hideFlagged || (a.status !== 'flagged' && a.status !== 'disabled'); })
+    .sort(function(a, b) {
     var aFlagged = a.status === 'flagged' || a.status === 'disabled' ? 1 : 0;
     var bFlagged = b.status === 'flagged' || b.status === 'disabled' ? 1 : 0;
     if (aFlagged !== bFlagged) return aFlagged - bFlagged;
@@ -985,10 +1044,14 @@ function renderAccounts(data) {
   container.innerHTML = sorted.map(function(a) {
     var isActive = a.status === 'active';
     var isCooldown = a.status === 'cooldown' || a.status === 'exhausted';
+    var now = Date.now();
+    var cooldowns = Object.values(a.cooldownsByModel || {});
+    var maxCooldownUntil = cooldowns.length > 0 ? Math.max.apply(null, cooldowns) : 0;
+    var cooldownRemaining = Math.max(0, maxCooldownUntil - now);
     var cooldownPercent = 0;
-    if (isCooldown && a.cooldownRemaining > 0) {
-      var totalCooldown = a.cooldownUntil - (a.lastUsed || now);
-      cooldownPercent = Math.max(0, Math.min(100, (a.cooldownRemaining / Math.max(totalCooldown, 1)) * 100));
+    if (isCooldown && cooldownRemaining > 0) {
+      var totalCooldown = maxCooldownUntil - (a.lastUsed || now);
+      cooldownPercent = Math.max(0, Math.min(100, (cooldownRemaining / Math.max(totalCooldown, 1)) * 100));
     }
 
     var modelBadges = (a.activeForModels || []).map(function(m) {
@@ -1013,7 +1076,7 @@ function renderAccounts(data) {
         '<div class="card-stat"><div class="stat-label">Last Used</div><div class="stat-value">' +
           (a.lastUsed ? formatTime(a.lastUsed) : '--') + '</div></div>' +
         (isCooldown ? '<div class="card-stat"><div class="stat-label">Cooldown</div><div class="stat-value" style="color:var(--yellow)">' +
-          formatDuration(a.cooldownRemaining) + '</div></div>' : '') +
+          formatDuration(cooldownRemaining) + '</div></div>' : '') +
         (a.inFlightRequests > 0 ? '<div class="card-stat"><div class="stat-label">In Flight</div><div class="stat-value" style="color:var(--blue)">' +
           a.inFlightRequests + '</div></div>' : '') +
         '<div class="card-stat"><div class="stat-label">Token</div><div class="stat-value" style="color:' +
@@ -1057,7 +1120,12 @@ function renderAttentionPanel(data) {
   var errors = accounts.filter(function(a) { return a.status === 'error'; });
   var cooldown = accounts
     .filter(function(a) { return a.status === 'cooldown'; })
-    .sort(function(a, b) { return a.cooldownRemaining - b.cooldownRemaining; })
+    .map(function(a) {
+      var ts = Object.values(a.cooldownsByModel || {});
+      var max = ts.length > 0 ? Math.max.apply(null, ts) : 0;
+      return { account: a, remaining: Math.max(0, max - Date.now()) };
+    })
+    .sort(function(a, b) { return a.remaining - b.remaining; })
     .slice(0, 4);
   var items = [];
 
@@ -1072,7 +1140,7 @@ function renderAttentionPanel(data) {
     items.push(renderAttentionItem(
       'Cooling down',
       'These are the next accounts expected to come back. Routing waits for their retry windows instead of forcing traffic into them.',
-      cooldown.map(function(a) { return maskText(a.label) + ' ' + formatDuration(a.cooldownRemaining); }).join(' | ')
+      cooldown.map(function(c) { return maskText(c.account.label) + ' ' + formatDuration(c.remaining); }).join(' | ')
     ));
   }
   if (disabled.length > 0) {
@@ -1109,6 +1177,465 @@ function renderAttentionItem(title, description, meta) {
     '<div class="operator-meta">' + meta + '</div>' +
   '</div>';
 }
+
+var TOKEN_MODEL_COLORS = {
+  'gemini-3.1-pro': '#8b5cf6',
+  'claude-opus-4-6-thinking': '#f59e0b',
+  'claude-sonnet-4-6': '#3b82f6',
+  'gemini-2.5-pro': '#10b981',
+  'gemini-2.5-flash': '#06b6d4',
+  'gemini-2.0-flash': '#ec4899',
+  '__other__': '#6b7280'
+};
+
+function getModelColor(model) {
+  return TOKEN_MODEL_COLORS[model] || TOKEN_MODEL_COLORS['__other__'];
+}
+
+function formatTokenCount(n) {
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+  return String(n);
+}
+
+window.__tokenView = '1h';
+
+function setTokenView(view) {
+  window.__tokenView = view;
+  refresh();
+}
+
+function formatBucketLabel(period, view) {
+  if (view === '1h') return ':' + period.slice(14); // ":05"
+  if (view === '1d') return period.slice(11, 13) + 'h'; // "12h"
+  if (view === '7d' || view === '1m') return period.slice(5, 10); // "04-28"
+  return period;
+}
+
+function renderTokenChart(tokenUsage) {
+  var panel = document.getElementById('tokenUsagePanel');
+  var chart = document.getElementById('tokenChart');
+  var legend = document.getElementById('tokenLegend');
+  var totals = document.getElementById('tokenTotals');
+  var view = window.__tokenView || '1h';
+
+  // Highlight active button
+  ['1h', '1d', '7d', '1m'].forEach(function(v) {
+    var btn = document.getElementById('tbtn-' + v);
+    if (btn) btn.className = 'btn-secondary btn-sm' + (v === view ? ' active' : '');
+  });
+
+  if (!tokenUsage) {
+    panel.style.display = 'none';
+    return;
+  }
+
+  // Helper: merge buckets into a map by truncated period key
+  function mergeBucketsBy(sources, sliceLen, limit) {
+    var map = {};
+    sources.forEach(function(b) {
+      var key = b.period.slice(0, sliceLen);
+      if (!map[key]) map[key] = { period: key, inputTokens: 0, outputTokens: 0, requests: 0, byModel: {} };
+      map[key].inputTokens += b.inputTokens;
+      map[key].outputTokens += b.outputTokens;
+      map[key].requests += b.requests;
+      Object.keys(b.byModel || {}).forEach(function(m) {
+        if (!map[key].byModel[m]) map[key].byModel[m] = { inputTokens: 0, outputTokens: 0, requests: 0 };
+        map[key].byModel[m].inputTokens += (b.byModel[m] || {}).inputTokens || 0;
+        map[key].byModel[m].outputTokens += (b.byModel[m] || {}).outputTokens || 0;
+        map[key].byModel[m].requests += (b.byModel[m] || {}).requests || 0;
+      });
+    });
+    return Object.keys(map).sort().map(function(k) { return map[k]; }).slice(-limit);
+  }
+
+  var allTiers = (tokenUsage.months || []).concat(tokenUsage.days || []).concat(tokenUsage.hours || []).concat(tokenUsage.minutes || []);
+
+  // Pick tier based on view
+  var buckets;
+  if (view === '1h') {
+    buckets = (tokenUsage.minutes || []).slice(-60);
+  } else if (view === '1d') {
+    // Merge hours + minutes into hourly buckets, last 24h
+    buckets = mergeBucketsBy((tokenUsage.hours || []).concat(tokenUsage.minutes || []), 13, 24);
+  } else if (view === '7d') {
+    buckets = mergeBucketsBy(allTiers, 10, 7);
+  } else {
+    buckets = mergeBucketsBy(allTiers, 10, 30);
+  }
+
+  if (!buckets || buckets.length === 0) {
+    chart.innerHTML = '<div style="color:var(--text-dim);padding:20px;text-align:center">No data for this range yet</div>';
+    totals.innerHTML = '';
+    legend.innerHTML = '';
+    return;
+  }
+  panel.style.display = '';
+
+  // Collect all models
+  var allModels = {};
+  buckets.forEach(function(b) {
+    Object.keys(b.byModel || {}).forEach(function(m) { allModels[m] = true; });
+  });
+  var models = Object.keys(allModels).sort();
+
+  // Max tokens for Y scale
+  var maxTokens = 0;
+  buckets.forEach(function(b) {
+    var total = b.inputTokens + b.outputTokens;
+    if (total > maxTokens) maxTokens = total;
+  });
+  if (maxTokens === 0) maxTokens = 1;
+
+  var barWidth = Math.max(16, Math.min(36, Math.floor(600 / buckets.length) - 4));
+  var gap = 4;
+  var chartHeight = 140;
+  var svgWidth = buckets.length * (barWidth + gap) + 60;
+
+  var bars = '';
+  buckets.forEach(function(b, i) {
+    var x = 40 + i * (barWidth + gap);
+
+    // Stack by model
+    var yOffset = chartHeight;
+    models.forEach(function(model) {
+      var md = (b.byModel || {})[model];
+      if (!md) return;
+      var modelTokens = md.inputTokens + md.outputTokens;
+      var segHeight = Math.max(0, (modelTokens / maxTokens) * (chartHeight - 20));
+      yOffset -= segHeight;
+      bars += '<rect x="' + x + '" y="' + yOffset + '" width="' + barWidth +
+        '" height="' + segHeight + '" fill="' + getModelColor(model) +
+        '" rx="2" opacity="0.85"><title>' + model + ': ' + formatTokenCount(modelTokens) + ' tokens (' + (md.requests || 0) + ' reqs)</title></rect>';
+    });
+
+    // X-axis label
+    var lbl = formatBucketLabel(b.period, view);
+    bars += '<text x="' + (x + barWidth / 2) + '" y="' + (chartHeight + 14) +
+      '" text-anchor="middle" fill="#888" font-size="9" font-family="JetBrains Mono,monospace">' + lbl + '</text>';
+  });
+
+  // Y-axis
+  var yLabels = '';
+  for (var yi = 0; yi <= 3; yi++) {
+    var yVal = (maxTokens / 3) * yi;
+    var yPos = chartHeight - ((chartHeight - 20) / 3) * yi;
+    yLabels += '<text x="36" y="' + (yPos + 3) + '" text-anchor="end" fill="#666" font-size="9" font-family="JetBrains Mono,monospace">' + formatTokenCount(Math.round(yVal)) + '</text>';
+    yLabels += '<line x1="38" y1="' + yPos + '" x2="' + svgWidth + '" y2="' + yPos + '" stroke="#333" stroke-dasharray="2,4"/>';
+  }
+
+  chart.innerHTML = '<svg width="' + svgWidth + '" height="' + (chartHeight + 20) + '" style="min-width:100%">' +
+    yLabels + bars + '</svg>';
+
+  var savings = tokenUsage.savings || { totalUsd: 0, byModel: {} };
+  var savingsText = savings.totalUsd > 0
+    ? ' · <span style="color:var(--green);font-weight:700">Savings: $' + savings.totalUsd.toFixed(2) + '</span>'
+    : '';
+
+  totals.innerHTML = 'In: ' + formatTokenCount(tokenUsage.totalInputTokens) +
+    ' · Out: ' + formatTokenCount(tokenUsage.totalOutputTokens) +
+    ' · Reqs: ' + tokenUsage.totalRequests +
+    savingsText;
+
+  legend.innerHTML = models.map(function(m) {
+    var modelSavings = (savings.byModel || {})[m];
+    var savingsLabel = modelSavings && modelSavings.totalUsd > 0.01
+      ? ' <span style="color:var(--green)">$' + modelSavings.totalUsd.toFixed(2) + '</span>'
+      : '';
+    return '<div style="display:flex;align-items:center;gap:4px">' +
+      '<div style="width:10px;height:10px;border-radius:2px;background:' + getModelColor(m) + '"></div>' +
+      '<span style="color:var(--text-dim)">' + m + savingsLabel + '</span></div>';
+  }).join('');
+}
+
+function formatMs(ms) {
+  if (ms >= 60000) return (ms / 60000).toFixed(1) + 'm';
+  if (ms >= 1000) return (ms / 1000).toFixed(1) + 's';
+  return ms + 'ms';
+}
+
+function renderHeatmap(tokenUsage) {
+  var panel = document.getElementById('heatmapPanel');
+  var grid = document.getElementById('heatmapGrid');
+  if (!tokenUsage) {
+    panel.style.display = 'none';
+    return;
+  }
+
+  var hours = tokenUsage.hours || [];
+  var minutes = tokenUsage.minutes || [];
+  var now = new Date();
+  var days = [];
+  for (var i = 6; i >= 0; i--) {
+    var d = new Date(now);
+    d.setDate(now.getDate() - i);
+    var key = d.toISOString().slice(0, 10);
+    days.push({ key: key, label: key.slice(5) });
+  }
+
+  var cellMap = {}; // day|hour -> requests
+  function addBucket(dayKey, hour, reqs) {
+    var k = dayKey + '|' + hour;
+    if (!cellMap[k]) cellMap[k] = 0;
+    cellMap[k] += reqs || 0;
+  }
+
+  hours.forEach(function(b) {
+    if (!b.period || b.period.length < 13) return;
+    var dayKey = b.period.slice(0, 10);
+    var hour = Number(b.period.slice(11, 13));
+    addBucket(dayKey, hour, b.requests);
+  });
+
+  minutes.forEach(function(b) {
+    if (!b.period || b.period.length < 16) return;
+    var dayKey = b.period.slice(0, 10);
+    var hour = Number(b.period.slice(11, 13));
+    addBucket(dayKey, hour, b.requests);
+  });
+
+  var max = 0;
+  for (var h = 0; h < 24; h++) {
+    for (var c = 0; c < days.length; c++) {
+      var v = cellMap[days[c].key + '|' + h] || 0;
+      if (v > max) max = v;
+    }
+  }
+
+  function colorFor(v) {
+    if (v <= 0 || max <= 0) return 'rgba(255,255,255,0.05)';
+    var t = v / max;
+    if (t < 0.2) return 'rgba(56,189,248,0.25)';
+    if (t < 0.4) return 'rgba(56,189,248,0.40)';
+    if (t < 0.6) return 'rgba(56,189,248,0.55)';
+    if (t < 0.8) return 'rgba(56,189,248,0.72)';
+    return 'rgba(56,189,248,0.92)';
+  }
+
+  var html = '<div style="overflow-x:auto"><table style="border-collapse:separate;border-spacing:3px;font-family:JetBrains Mono,monospace;font-size:0.7rem">';
+  html += '<tr><th style="color:var(--text-dim);padding-right:6px">h</th>';
+  days.forEach(function(d) { html += '<th style="color:var(--text-dim);font-weight:500">' + d.label + '</th>'; });
+  html += '</tr>';
+
+  for (var hour = 23; hour >= 0; hour--) {
+    html += '<tr><td style="color:var(--text-dim);padding-right:6px">' + String(hour).padStart(2, '0') + '</td>';
+    for (var j = 0; j < days.length; j++) {
+      var day = days[j].key;
+      var val = cellMap[day + '|' + hour] || 0;
+      html += '<td title="' + day + ' ' + String(hour).padStart(2, '0') + ':00 · ' + val + ' req" style="width:13px;height:13px;border-radius:3px;background:' + colorFor(val) + ';border:1px solid rgba(255,255,255,0.08)"></td>';
+    }
+    html += '</tr>';
+  }
+
+  html += '</table></div>';
+  grid.innerHTML = html;
+  panel.style.display = '';
+}
+
+function renderForecastPanel(data) {
+  var panel = document.getElementById('forecastPanel');
+  var grid = document.getElementById('forecastGrid');
+  var accounts = data.accounts || [];
+  var tokenUsage = data.tokenUsage || {};
+
+  // Aggregate quota per model across all healthy accounts
+  var modelQuota = {}; // { modelKey: { totalPercent, accountCount, quotaEntries[] } }
+  accounts.forEach(function(a) {
+    if (a.status === 'flagged' || a.status === 'disabled') return;
+    (a.quota || []).forEach(function(q) {
+      if (!modelQuota[q.modelKey]) modelQuota[q.modelKey] = { totalPercent: 0, accountCount: 0, entries: [] };
+      modelQuota[q.modelKey].totalPercent += q.percentRemaining;
+      modelQuota[q.modelKey].accountCount += 1;
+      modelQuota[q.modelKey].entries.push(q);
+    });
+  });
+
+  // Calculate burn rate per model from last hour of token usage
+  var minutes = tokenUsage.minutes || [];
+  var now = Date.now();
+  var oneHourAgo = now - 3600000;
+  var recentMinutes = minutes.filter(function(b) {
+    try { return new Date(b.period).getTime() > oneHourAgo; } catch(e) { return false; }
+  });
+  var burnByModel = {}; // requests per hour
+  recentMinutes.forEach(function(b) {
+    Object.keys(b.byModel || {}).forEach(function(m) {
+      if (!burnByModel[m]) burnByModel[m] = 0;
+      burnByModel[m] += (b.byModel[m] || {}).requests || 0;
+    });
+  });
+  // Scale to per-hour if we have less than 60 min of data
+  var minuteSpan = recentMinutes.length || 1;
+  Object.keys(burnByModel).forEach(function(m) {
+    burnByModel[m] = (burnByModel[m] / minuteSpan) * 60; // reqs/hour
+  });
+
+  var models = Object.keys(modelQuota).sort();
+  if (models.length === 0) {
+    panel.style.display = 'none';
+    return;
+  }
+  panel.style.display = '';
+
+  var html = '<table style="width:100%;border-collapse:collapse;font-family:JetBrains Mono,monospace;font-size:0.8rem">' +
+    '<tr style="color:var(--text-dim);text-align:left">' +
+      '<th style="padding:4px 8px">Model</th>' +
+      '<th style="padding:4px 8px">Pool Quota</th>' +
+      '<th style="padding:4px 8px">Accounts</th>' +
+      '<th style="padding:4px 8px">Burn Rate</th>' +
+      '<th style="padding:4px 8px">Estimate</th>' +
+    '</tr>';
+
+  models.forEach(function(m) {
+    var q = modelQuota[m];
+    var avgQuota = q.accountCount > 0 ? Math.round(q.totalPercent / q.accountCount) : 0;
+    var color = getModelColor(m);
+    var rate = burnByModel[m] || 0;
+    var rateLabel = rate > 0 ? rate.toFixed(1) + ' req/h' : 'idle';
+
+    // Estimate: assume ~100 requests per full 100% quota window (empirical)
+    // Total remaining "request capacity" ≈ sum of (percent/100 * 100) per account
+    var totalCapacity = q.totalPercent; // each 1% ≈ 1 request remaining
+    var hoursLeft;
+    var estimateLabel;
+    var estimateColor = 'var(--text)';
+    if (rate <= 0) {
+      estimateLabel = '\u221e';
+      estimateColor = 'var(--green)';
+    } else {
+      hoursLeft = totalCapacity / rate;
+      if (hoursLeft > 24) {
+        estimateLabel = (hoursLeft / 24).toFixed(1) + 'd';
+        estimateColor = 'var(--green)';
+      } else if (hoursLeft > 1) {
+        estimateLabel = hoursLeft.toFixed(1) + 'h';
+        estimateColor = hoursLeft < 3 ? 'var(--yellow)' : 'var(--text)';
+      } else {
+        estimateLabel = Math.round(hoursLeft * 60) + 'min';
+        estimateColor = 'var(--red)';
+      }
+    }
+
+    // Quota bar
+    var barColor = avgQuota > 50 ? 'var(--green)' : avgQuota > 20 ? 'var(--yellow)' : 'var(--red)';
+    var bar = '<div style="display:flex;align-items:center;gap:6px">' +
+      '<div style="flex:1;height:6px;background:rgba(255,255,255,0.08);border-radius:3px;overflow:hidden">' +
+        '<div style="width:' + avgQuota + '%;height:100%;background:' + barColor + ';border-radius:3px"></div>' +
+      '</div>' +
+      '<span>' + avgQuota + '%</span></div>';
+
+    html += '<tr style="border-top:1px solid var(--border)">' +
+      '<td style="padding:4px 8px"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:' + color + ';margin-right:6px"></span>' + m + '</td>' +
+      '<td style="padding:4px 8px;min-width:120px">' + bar + '</td>' +
+      '<td style="padding:4px 8px;text-align:center">' + q.accountCount + '</td>' +
+      '<td style="padding:4px 8px">' + rateLabel + '</td>' +
+      '<td style="padding:4px 8px;color:' + estimateColor + ';font-weight:700">' + estimateLabel + '</td>' +
+    '</tr>';
+  });
+
+  html += '</table>';
+  grid.innerHTML = html;
+}
+
+function renderLatencyPanel(latencyStats) {
+  var panel = document.getElementById('latencyPanel');
+  var grid = document.getElementById('latencyGrid');
+  if (!latencyStats || Object.keys(latencyStats).length === 0) {
+    panel.style.display = 'none';
+    return;
+  }
+  panel.style.display = '';
+
+  var models = Object.keys(latencyStats).sort();
+  var html = '<table style="width:100%;border-collapse:collapse;font-family:JetBrains Mono,monospace;font-size:0.8rem">' +
+    '<tr style="color:var(--text-dim);text-align:left">' +
+      '<th style="padding:4px 8px">Model</th>' +
+      '<th style="padding:4px 8px">TTFB p50</th>' +
+      '<th style="padding:4px 8px">TTFB p95</th>' +
+      '<th style="padding:4px 8px">Total p50</th>' +
+      '<th style="padding:4px 8px">Total p95</th>' +
+      '<th style="padding:4px 8px">Samples</th>' +
+    '</tr>';
+
+  models.forEach(function(m) {
+    var s = latencyStats[m];
+    var color = getModelColor(m);
+    html += '<tr style="border-top:1px solid var(--border)">' +
+      '<td style="padding:4px 8px"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:' + color + ';margin-right:6px"></span>' + m + '</td>' +
+      '<td style="padding:4px 8px">' + formatMs(s.ttfb.p50) + '</td>' +
+      '<td style="padding:4px 8px;color:' + (s.ttfb.p95 > 10000 ? 'var(--yellow)' : 'var(--text)') + '">' + formatMs(s.ttfb.p95) + '</td>' +
+      '<td style="padding:4px 8px">' + formatMs(s.total.p50) + '</td>' +
+      '<td style="padding:4px 8px;color:' + (s.total.p95 > 30000 ? 'var(--yellow)' : 'var(--text)') + '">' + formatMs(s.total.p95) + '</td>' +
+      '<td style="padding:4px 8px;color:var(--text-dim)">' + s.count + '</td>' +
+    '</tr>';
+  });
+
+  html += '</table>';
+  grid.innerHTML = html;
+}
+
+function renderRequestLog(log) {
+  var panel = document.getElementById('requestLogPanel');
+  var grid = document.getElementById('requestLogGrid');
+  if (!log || log.length === 0) {
+    panel.style.display = 'none';
+    return;
+  }
+  panel.style.display = '';
+
+  var fModel = (document.getElementById('logFilterModel').value || '').toLowerCase();
+  var fAccount = (document.getElementById('logFilterAccount').value || '').toLowerCase();
+  var fStatus = (document.getElementById('logFilterStatus').value || '').trim();
+
+  var filtered = log.filter(function(r) {
+    if (fModel && r.model.toLowerCase().indexOf(fModel) === -1) return false;
+    if (fAccount && r.account.toLowerCase().indexOf(fAccount) === -1) return false;
+    if (fStatus && String(r.statusCode).indexOf(fStatus) === -1) return false;
+    return true;
+  });
+
+  var html = '<table style="width:100%;border-collapse:collapse;font-family:JetBrains Mono,monospace;font-size:0.75rem">' +
+    '<tr style="color:var(--text-dim);text-align:left;position:sticky;top:0;background:var(--card-bg)">' +
+      '<th style="padding:3px 6px">Time</th>' +
+      '<th style="padding:3px 6px">Model</th>' +
+      '<th style="padding:3px 6px">Account</th>' +
+      '<th style="padding:3px 6px">Status</th>' +
+      '<th style="padding:3px 6px">TTFB</th>' +
+      '<th style="padding:3px 6px">Total</th>' +
+      '<th style="padding:3px 6px">Tokens</th>' +
+    '</tr>';
+
+  filtered.forEach(function(r) {
+    var t = new Date(r.timestamp);
+    var time = ('0'+t.getHours()).slice(-2) + ':' + ('0'+t.getMinutes()).slice(-2) + ':' + ('0'+t.getSeconds()).slice(-2);
+    var statusColor = r.statusCode === 200 ? 'var(--green)' : r.statusCode === 429 ? 'var(--yellow)' : 'var(--red)';
+    var color = getModelColor(r.model);
+    var tokens = r.inputTokens || r.outputTokens
+      ? formatTokenCount(r.inputTokens) + '/' + formatTokenCount(r.outputTokens)
+      : '-';
+    html += '<tr style="border-top:1px solid var(--border)">' +
+      '<td style="padding:3px 6px;color:var(--text-dim)">' + time + '</td>' +
+      '<td style="padding:3px 6px"><span style="display:inline-block;width:6px;height:6px;border-radius:2px;background:' + color + ';margin-right:4px"></span>' + r.model + '</td>' +
+      '<td style="padding:3px 6px">' + (MASK_MODE ? '***' : r.account) + '</td>' +
+      '<td style="padding:3px 6px;color:' + statusColor + ';font-weight:700">' + r.statusCode + '</td>' +
+      '<td style="padding:3px 6px">' + formatMs(r.ttfbMs) + '</td>' +
+      '<td style="padding:3px 6px">' + formatMs(r.totalMs) + '</td>' +
+      '<td style="padding:3px 6px">' + tokens + '</td>' +
+    '</tr>';
+  });
+
+  html += '</table>';
+  if (filtered.length === 0) html = '<div style="color:var(--text-dim);text-align:center;padding:12px">No matching requests</div>';
+  grid.innerHTML = html;
+}
+
+// Wire up filter inputs to re-render
+(function() {
+  ['logFilterModel','logFilterAccount','logFilterStatus'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.addEventListener('input', function() { if (window.__lastData) renderRequestLog(window.__lastData.requestLog); });
+  });
+})();
 
 function renderRecentEvents(events) {
   var panel = document.getElementById('recentEventsPanel');
@@ -1197,6 +1724,11 @@ async function setFreshWindowStarts(enabled) {
   refresh();
 }
 
+function toggleFlagged() {
+  window.__hideFlagged = !window.__hideFlagged;
+  refresh();
+}
+
 async function setAccountFreshWindowOverride(email, enabled) {
   await fetch('/api/account-fresh-window-starts/' + encodeURIComponent(email) + '/' + (enabled ? 'on' : 'off'), { method: 'POST' });
   refresh();
@@ -1264,6 +1796,25 @@ async function refresh() {
   }
 }
 
+// Live updates via SSE
+var evtSource = null;
+function connectSSE() {
+  if (evtSource) evtSource.close();
+  evtSource = new EventSource('/api/events');
+  evtSource.onmessage = function(e) {
+    try {
+      var data = JSON.parse(e.data);
+      renderAccounts(data);
+    } catch(err) { console.error('SSE parse error:', err); }
+  };
+  evtSource.onerror = function() {
+    // reconnect after 5s on error
+    evtSource.close();
+    evtSource = null;
+    setTimeout(connectSSE, 5000);
+  };
+}
+
 function toggleMask() {
   var url = new URL(window.location);
   if (MASK_MODE) {
@@ -1282,7 +1833,8 @@ document.addEventListener('keydown', function(event) {
 });
 
 refresh();
-setInterval(refresh, 3000);
+connectSSE();
+setInterval(refresh, 15000); // fallback poll every 15s in case SSE drops
 </script>
 </body>
 </html>`;

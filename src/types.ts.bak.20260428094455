@@ -285,7 +285,6 @@ export const ANTIGRAVITY_ENDPOINTS = [
 ] as const;
 
 export const QUOTA_API_URL = "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels";
-const ANTIGRAVITY_VERSION = process.env.PI_AI_ANTIGRAVITY_VERSION || "1.107.0";
-export const QUOTA_USER_AGENT = process.env.PI_ROTATOR_QUOTA_USER_AGENT || `antigravity/${ANTIGRAVITY_VERSION} darwin/arm64`;
+export const QUOTA_USER_AGENT = "antigravity/1.11.9 darwin/arm64";
 
 export const LONG_TIMER_MS = 7 * 24 * 60 * 60 * 1000; // 7 days

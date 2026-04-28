@@ -219,8 +219,11 @@ The dashboard is intended to replace day-to-day `journalctl` digging for normal 
 Config files (`accounts.json`, `state.json`) are stored in `~/.pi-antigravity-rotator/` by default. Override with:
 
 ```bash
-# Environment variable
+# Environment variables
 export PI_ROTATOR_DIR=/path/to/config
+export PI_ROTATOR_QUOTA_USER_AGENT="antigravity/1.107.0 darwin/arm64"
+# Optional override for Antigravity UA version used by quota fetches
+export PI_AI_ANTIGRAVITY_VERSION=1.107.0
 
 # Or CLI flag
 pi-antigravity-rotator start --config-dir /path/to/config

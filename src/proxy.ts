@@ -17,7 +17,7 @@ import { handleHostedCallback, serveLoginLanding, startHostedLogin } from "./onb
 
 const MAX_ENDPOINT_RETRIES = 3;
 const MAX_COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes max cooldown
-const STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000; // Release account if a stream goes silent.
+const STREAM_IDLE_TIMEOUT_MS = 2 * 60 * 1000; // Release account if a stream goes silent.
 
 interface RequestBody {
 	project: string;
@@ -105,18 +105,46 @@ function isFetchTransportError(err: unknown): boolean {
 	return err instanceof TypeError && err.message === "fetch failed";
 }
 
+/** Extract token usage from SSE stream or JSON response body */
+function extractTokenUsage(buffer: string): { inputTokens: number; outputTokens: number } | null {
+	try {
+		// Look for usageMetadata/usage anywhere in the buffer via regex
+		// Handles both SSE `data: {...}` and raw JSON chunks
+		const patterns = [
+			/"promptTokenCount"\s*:\s*(\d+).*?"candidatesTokenCount"\s*:\s*(\d+)/s,
+			/"input_tokens"\s*:\s*(\d+).*?"output_tokens"\s*:\s*(\d+)/s,
+		];
+		for (const pattern of patterns) {
+			const match = buffer.match(pattern);
+			if (match) {
+				return {
+					inputTokens: parseInt(match[1], 10),
+					outputTokens: parseInt(match[2], 10),
+				};
+			}
+		}
+	} catch { /* extraction failed */ }
+	return null;
+}
+
+// Keep last ~32KB of stream to find usage metadata in the final chunk
+const USAGE_TAIL_BYTES = 32 * 1024;
+
 async function streamResponseBody(
 	body: Response["body"],
 	req: IncomingMessage,
 	res: ServerResponse,
 	label: string,
 	proxyLog: (msg: string, level?: "info" | "warn" | "error") => void,
-): Promise<void> {
-	if (!body) return;
+): Promise<{ inputTokens: number; outputTokens: number; firstByteMs: number } | null> {
+	if (!body) return null;
 
 	const nodeStream = Readable.fromWeb(body as import("node:stream/web").ReadableStream);
+	let tailBuffer = "";
+	const streamStartMs = Date.now();
+	let firstByteMs = 0;
 
-	await new Promise<void>((resolve) => {
+	const usage = await new Promise<{ inputTokens: number; outputTokens: number; firstByteMs: number } | null>((resolve) => {
 		let settled = false;
 		let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -126,7 +154,6 @@ async function streamResponseBody(
 			nodeStream.off("end", onEnd);
 			nodeStream.off("error", onError);
 			nodeStream.off("close", onClose);
-			req.off("aborted", onClientAbort);
 			req.off("close", onClientClose);
 			res.off("close", onResponseClose);
 			res.off("error", onResponseError);
@@ -137,7 +164,8 @@ async function streamResponseBody(
 			settled = true;
 			if (reason) proxyLog(`[${label}] Stream closed: ${reason}`, "warn");
 			cleanup();
-			resolve();
+			const extracted = extractTokenUsage(tailBuffer);
+			resolve(extracted ? { ...extracted, firstByteMs } : null);
 		};
 
 		const resetIdleTimer = (): void => {
@@ -149,7 +177,13 @@ async function streamResponseBody(
 		};
 
 		const onData = (chunk: Buffer): void => {
+			if (firstByteMs === 0) firstByteMs = Date.now() - streamStartMs;
 			resetIdleTimer();
+			const str = chunk.toString();
+			tailBuffer += str;
+			if (tailBuffer.length > USAGE_TAIL_BYTES) {
+				tailBuffer = tailBuffer.slice(-USAGE_TAIL_BYTES);
+			}
 			if (!res.destroyed && !res.writableEnded) {
 				res.write(chunk);
 			}
@@ -157,18 +191,19 @@ async function streamResponseBody(
 		const onEnd = (): void => finish();
 		const onError = (err: Error): void => finish(String(err));
 		const onClose = (): void => finish();
-		const onClientAbort = (): void => {
-			nodeStream.destroy();
-			finish("client aborted");
-		};
+		// req.aborted is deprecated and unreliable since Node 18+.
+		// req.on("close") is the correct signal for client disconnect in Node 22.
 		const onClientClose = (): void => {
-			if (!res.writableEnded) {
+			// Always destroy when the client disconnects — regardless of writableEnded.
+			// The upstream stream from Google may still be open even if res finished writing,
+			// which would leave the account stuck in-flight until the idle timeout.
+			if (!settled) {
 				nodeStream.destroy();
 				finish("client closed connection");
 			}
 		};
 		const onResponseClose = (): void => {
-			if (!res.writableEnded) {
+			if (!settled) {
 				nodeStream.destroy();
 				finish("response closed before completion");
 			}
@@ -182,12 +217,13 @@ async function streamResponseBody(
 		nodeStream.once("end", onEnd);
 		nodeStream.once("error", onError);
 		nodeStream.once("close", onClose);
-		req.once("aborted", onClientAbort);
 		req.once("close", onClientClose);
 		res.once("close", onResponseClose);
 		res.once("error", onResponseError);
 		resetIdleTimer();
 	});
+
+	return usage;
 }
 
 /**
@@ -282,6 +318,7 @@ async function handleProxyRequest(
 	req: IncomingMessage,
 	res: ServerResponse,
 	rotator: AccountRotator,
+	onComplete?: () => void,
 ): Promise<void> {
 	const bodyBuffer = await readBody(req);
 	let body: RequestBody;
@@ -318,7 +355,27 @@ async function handleProxyRequest(
 		}
 
 		const label = account.config.label || account.config.email;
-		proxyLog(`[${label}] Forwarding ${body.model} request (attempt ${attempt + 1})`);
+		const modelKey = resolveQuotaModelKey(body.model) ?? body.model;
+		const requestId = `${modelKey}-${Date.now().toString(36)}-${attempt + 1}`;
+		proxyLog(`[${requestId}] START account=${label} model=${body.model} attempt=${attempt + 1}`);
+		const requestStartMs = Date.now();
+		const logRequestEnd = (status: string | number, extra = ""): void => {
+			proxyLog(
+				`[${requestId}] END account=${label} model=${body.model} status=${status}${extra ? ` ${extra}` : ""} totalMs=${Date.now() - requestStartMs}`,
+				status === 200 || status === 0 ? "info" : "warn",
+			);
+		};
+		const recordOutcome = (statusCode: number, ttfbMs = 0, totalMs = Date.now() - requestStartMs, inputTokens = 0, outputTokens = 0): void => {
+			rotator.recordRequestLog({
+				model: modelKey,
+				account: label,
+				statusCode,
+				ttfbMs,
+				totalMs,
+				inputTokens,
+				outputTokens,
+			});
+		};
 
 		try {
 			const response = await forwardRequest(account, { ...body }, flattenHeaders(req.headers));
@@ -327,7 +384,9 @@ async function handleProxyRequest(
 				const errorText = await response.text().catch(() => "");
 				const cooldownMs = capCooldown(extractRetryDelay(errorText, response.headers));
 				proxyLog(`[${label}] 429 rate limited, cooldown ${Math.ceil(cooldownMs / 1000)}s`, "warn");
-				rotator.markExhausted(account, cooldownMs);
+				recordOutcome(429);
+				logRequestEnd(429, `cooldownMs=${cooldownMs}`);
+				rotator.markExhausted(account, body.model, cooldownMs);
 				res.writeHead(503, {
 					"Content-Type": "application/json",
 					"Retry-After": String(Math.ceil(cooldownMs / 1000)),
@@ -336,6 +395,7 @@ async function handleProxyRequest(
 					error: "Rate limited",
 					reason: `${label} was rate limited; not retrying another account for this request`,
 					model: body.model,
+					account: label,
 					retryAfterMs: cooldownMs,
 				}));
 				return;
@@ -345,6 +405,7 @@ async function handleProxyRequest(
 					const errorText = await response.text().catch(() => "");
 					proxyLog(`[${label}] BLOCKED (401): ${errorText.slice(0, 200)}`, "error");
 					rotator.markFlagged(account, `Account blocked (401): ${errorText.slice(0, 300)}`);
+					logRequestEnd(401);
 				const nextAccount = await rotateAndRelease();
 				if (!nextAccount) {
 					sendNoAccountsAvailable(`no replacement account remained after ${label} was flagged with 401`);
@@ -361,6 +422,8 @@ async function handleProxyRequest(
 
 					if (isFlagged) {
 						proxyLog(`[${label}] FLAGGED: ${errorText.slice(0, 200)}`, "error");
+						recordOutcome(403);
+						logRequestEnd(403);
 						rotator.markFlagged(account, errorText.slice(0, 300));
 					const nextAccount = await rotateAndRelease();
 					if (!nextAccount) {
@@ -371,6 +434,7 @@ async function handleProxyRequest(
 					}
 					// Non-flagging 403: return to client
 					proxyLog(`[${label}] 403: ${errorText.slice(0, 200)}`, "warn");
+					logRequestEnd(403);
 					res.writeHead(403, { "Content-Type": "application/json" });
 				res.end(errorText || JSON.stringify({ error: "Forbidden" }));
 				return;
@@ -379,19 +443,23 @@ async function handleProxyRequest(
 				if (response.status >= 500) {
 					const errorText = await response.text().catch(() => "");
 					proxyLog(`[${label}] Server error ${response.status}: ${errorText.slice(0, 200)}`, "warn");
-				if (response.status === 503) {
-					res.writeHead(503, { "Content-Type": "application/json" });
-					res.end(errorText || JSON.stringify({ error: "Server unavailable" }));
-					return;
+					recordOutcome(response.status);
+					logRequestEnd(response.status);
+					if (response.status === 503) {
+						// Return 503 as-is. Capacity errors still consume quota upstream,
+						// so retrying on another account would just burn more quota for nothing.
+						res.writeHead(503, { "Content-Type": "application/json" });
+						res.end(errorText || JSON.stringify({ error: "Server unavailable", account: label, model: body.model }));
+						return;
+					}
+					rotator.markError(account, `${response.status}: ${errorText.slice(0, 200)}`);
+					const nextAccount = await rotateAndRelease();
+					if (!nextAccount) {
+						sendNoAccountsAvailable(`no replacement account remained after ${label} failed with ${response.status}`);
+						return;
+					}
+					continue;
 				}
-				rotator.markError(account, `${response.status}: ${errorText.slice(0, 200)}`);
-				const nextAccount = await rotateAndRelease();
-				if (!nextAccount) {
-					sendNoAccountsAvailable(`no replacement account remained after ${label} failed with ${response.status}`);
-					return;
-				}
-				continue;
-			}
 
 			// Success or non-error client response
 			const shouldRotate = rotator.recordRequest(account, body.model);
@@ -406,7 +474,23 @@ async function handleProxyRequest(
 			res.writeHead(response.status, responseHeaders);
 
 				try {
-					await streamResponseBody(response.body, req, res, label, proxyLog);
+					const usage = await streamResponseBody(response.body, req, res, label, proxyLog);
+					const totalMs = Date.now() - requestStartMs;
+					const ttfbMs = usage?.firstByteMs ?? totalMs;
+					rotator.recordLatency(body.model, ttfbMs, totalMs);
+				logRequestEnd(response.status, `ttfbMs=${ttfbMs}`);
+					rotator.recordRequestLog({
+						model: resolveQuotaModelKey(body.model) ?? body.model,
+						account: label,
+						statusCode: response.status,
+						ttfbMs,
+						totalMs,
+						inputTokens: usage?.inputTokens ?? 0,
+						outputTokens: usage?.outputTokens ?? 0,
+					});
+					if (usage && (usage.inputTokens > 0 || usage.outputTokens > 0)) {
+						rotator.recordTokenUsage(body.model, usage.inputTokens, usage.outputTokens);
+					}
 				} catch (err) {
 					proxyLog(`[${label}] Stream setup error: ${err}`, "warn");
 				}
@@ -419,6 +503,8 @@ async function handleProxyRequest(
 			} catch (err) {
 				const formattedError = formatError(err);
 				proxyLog(`[${label}] Request failed: ${formattedError}`, isFetchTransportError(err) ? "warn" : "error");
+				recordOutcome(isFetchTransportError(err) ? 0 : 500);
+				logRequestEnd(isFetchTransportError(err) ? "fetch-error" : 500, `error=${formattedError.slice(0, 120)}`);
 				if (!isFetchTransportError(err)) {
 					rotator.markError(account, formattedError);
 				}
@@ -434,6 +520,7 @@ async function handleProxyRequest(
 			continue;
 		} finally {
 			rotator.finishRequest(account, resolveQuotaModelKey(body.model) ?? undefined);
+			if (onComplete) onComplete();
 		}
 	}
 
@@ -454,6 +541,33 @@ function flattenHeaders(headers: IncomingMessage["headers"]): Record<string, str
 }
 
 export function startProxy(rotator: AccountRotator, port: number): void {
+	const sseClients = new Set<ServerResponse>();
+	let sseBroadcastTimer: ReturnType<typeof setTimeout> | null = null;
+	const SSE_THROTTLE_MS = 1000; // max 1 push/second
+
+	const scheduleSseBroadcast = (): void => {
+		if (sseBroadcastTimer) return; // already scheduled
+		sseBroadcastTimer = setTimeout(() => {
+			sseBroadcastTimer = null;
+			if (sseClients.size === 0) return;
+			const data = JSON.stringify(rotator.getStatus());
+			for (const client of sseClients) {
+				try {
+					client.write(`data: ${data}\n\n`);
+				} catch {
+					sseClients.delete(client);
+				}
+			}
+		}, SSE_THROTTLE_MS);
+	};
+
+	// Hook into rotator state changes to trigger SSE
+	const origSaveState = rotator.saveState.bind(rotator);
+	rotator.saveState = (): void => {
+		origSaveState();
+		scheduleSseBroadcast();
+	};
+
 	const server = createServer((req, res) => {
 		const method = req.method?.toUpperCase();
 		const url = req.url || "";
@@ -487,6 +601,20 @@ export function startProxy(rotator: AccountRotator, port: number): void {
 
 		if (method === "GET" && url === "/api/status") {
 			serveStatusApi(res, rotator);
+			return;
+		}
+
+		if (method === "GET" && url === "/api/events") {
+			// Server-Sent Events for live dashboard
+			res.writeHead(200, {
+				"Content-Type": "text/event-stream",
+				"Cache-Control": "no-cache",
+				"Connection": "keep-alive",
+				"X-Accel-Buffering": "no",
+			});
+			res.write(":\n\n"); // keepalive comment
+			sseClients.add(res);
+			req.on("close", () => sseClients.delete(res));
 			return;
 		}
 
@@ -524,7 +652,7 @@ export function startProxy(rotator: AccountRotator, port: number): void {
 
 		// Proxy route
 		if (method === "POST" && url.includes("v1internal")) {
-			handleProxyRequest(req, res, rotator).catch((err) => {
+			handleProxyRequest(req, res, rotator, scheduleSseBroadcast).catch((err) => {
 				log(`Unhandled error: ${err}`, rotator, "error");
 				if (!res.headersSent) {
 					res.writeHead(500, { "Content-Type": "application/json" });

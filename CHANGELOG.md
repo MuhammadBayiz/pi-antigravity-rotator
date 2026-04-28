@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-04-28
+
+### Added
+- **Savings Estimation**: Dashboard now calculates and displays estimated USD savings based on tracked token usage compared to paid API pricing.
+- **Latency Tracking**: Proxy measures Time-to-First-Byte (TTFB) and Total duration per request. Dashboard displays p50/p95 latency stats by model.
+- **Quota Forecast**: Dashboard predicts when each model's quota will run out based on real-time requests/hour burn rate.
+- **Live Dashboard (SSE)**: Dashboard now updates in real-time via Server-Sent Events, removing the need for polling or manual refreshes.
+- **Live Request Log**: Searchable, real-time mini-log in the dashboard showing the last 200 requests (Account, Model, Status, TTFB, Total duration, Tokens).
+- **Activity Heatmap**: GitHub-style contribution grid displaying request intensity per hour across the last 7 days.
+- **Enhanced Logging**: Added explicit `START` and `END` proxy logs with unique request IDs for unambiguous tracing of 503s and 429s.
+
+### Changed
+- Configurable **Antigravity Version**: Extracted hardcoded `QUOTA_USER_AGENT` into an environment variable to prevent "This version of Antigravity is no longer supported" API errors. Now uses `1.107.0` by default.
+- Per-model cooldown granularity: Accounts can now serve fallback models (e.g. Gemini) even if their primary model (e.g. Claude) is exhausted.
+- **Token Tracking Architecture**: Refactored token usage into a tiered time-series (minutes/hours/days/months) with rolling sliding windows to avoid data drops at calendar boundaries.
+
+### Fixed
+- Fixed in-flight request leak where accounts could get stuck in a "busy" state indefinitely due to deprecated `req.aborted` handlers in Node 24.
+- Fixed rate-limit logic bypassing model-specific cooldown checks after a 429 was hit.
+
+
 ## [1.3.9] - 2026-04-27
 
 ### Fixed

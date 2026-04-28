@@ -12,6 +12,10 @@ import {
 	type PersistedState,
 	type ProAdvisorAction,
 	type StatusResponse,
+	type TokenBucket,
+	type TokenUsageData,
+	type TokenUsageTiered,
+	MODEL_PRICING,
 	TOKEN_URL,
 	LONG_TIMER_MS,
 	QUOTA_API_URL,
@@ -24,6 +28,7 @@ import { saveAccountsConfig } from "./account-store.js";
 import { getOAuthClientConfig } from "./oauth.js";
 
 const STATE_FILE = getStatePath();
+const TOKENS_FILE = STATE_FILE.replace("state.json", "token-usage.json");
 
 export class AccountRotator {
 	private accounts: AccountRuntime[] = [];
@@ -38,6 +43,11 @@ export class AccountRotator {
 	private allowFreshWindowStarts = true;
 	private recentEvents: StatusResponse["recentEvents"] = [];
 	private static readonly RECENT_EVENT_LIMIT = 40;
+	private tokenBuckets: TokenUsageTiered = { minutes: [], hours: [], days: [], months: [] };
+	private latencyRecords: Map<string, { ttfbMs: number; totalMs: number }[]> = new Map();
+	private static readonly MAX_LATENCY_RECORDS = 200;
+	private requestLog: StatusResponse["requestLog"] = [];
+	private static readonly MAX_REQUEST_LOG = 200;
 
 	constructor(private config: Config) {
 		this.initAccounts();
@@ -52,7 +62,7 @@ export class AccountRotator {
 			tokenExpires: 0,
 			requestsSinceRotation: 0,
 			totalRequests: 0,
-			cooldownUntil: 0,
+			cooldownsByModel: {},
 			quotaExhaustedAt: 0,
 			quota: [],
 			lastQuotaPoll: 0,
@@ -95,7 +105,11 @@ export class AccountRotator {
 				const saved = state.accounts[account.config.email];
 				if (saved) {
 					account.totalRequests = saved.totalRequests;
-					account.cooldownUntil = saved.cooldownUntil;
+					account.cooldownsByModel = saved.cooldownsByModel ?? {};
+					if (saved.cooldownUntil !== undefined && Object.keys(account.cooldownsByModel).length === 0) {
+						// legacy migration: apply global cooldown to default
+						account.cooldownsByModel["__default__"] = saved.cooldownUntil;
+					}
 					account.quotaExhaustedAt = saved.quotaExhaustedAt;
 					account.disabled = saved.disabled;
 					account.flagged = saved.flagged ?? false;
@@ -106,13 +120,44 @@ export class AccountRotator {
 			const maxCooldown = 30 * 60 * 1000;
 			const now = Date.now();
 			for (const account of this.accounts) {
-				if (account.cooldownUntil > now + maxCooldown) {
-					account.cooldownUntil = now + maxCooldown;
+				for (const [model, cooldown] of Object.entries(account.cooldownsByModel)) {
+					if (cooldown > now + maxCooldown) {
+						account.cooldownsByModel[model] = now + maxCooldown;
+					}
 				}
 			}
 			this.log("Loaded state from disk");
 		} catch {
 			this.log("Could not load state, starting fresh");
+		}
+		// Load token usage from separate file
+		try {
+			if (existsSync(TOKENS_FILE)) {
+				const raw = readFileSync(TOKENS_FILE, "utf-8");
+				const parsed = JSON.parse(raw);
+				const normalize = (arr: any[]): TokenBucket[] => (arr || []).map((b: any) => ({
+					period: b.period ?? b.hour ?? "unknown",
+					inputTokens: Number(b.inputTokens || 0),
+					outputTokens: Number(b.outputTokens || 0),
+					requests: Number(b.requests || 0),
+					byModel: b.byModel || {},
+				})).filter((b: TokenBucket) => b.period && b.period !== "unknown");
+				if (Array.isArray(parsed)) {
+					// Migrate from flat array (old format)
+					this.tokenBuckets = { minutes: normalize(parsed), hours: [], days: [], months: [] };
+				} else {
+					this.tokenBuckets = {
+						minutes: normalize(parsed.minutes || []),
+						hours: normalize(parsed.hours || []),
+						days: normalize(parsed.days || []),
+						months: normalize(parsed.months || []),
+					};
+				}
+				const total = this.tokenBuckets.minutes.length + this.tokenBuckets.hours.length + this.tokenBuckets.days.length + this.tokenBuckets.months.length;
+				this.log(`Loaded ${total} token usage buckets`);
+			}
+		} catch {
+			this.log("Could not load token usage, starting fresh");
 		}
 	}
 
@@ -136,7 +181,7 @@ export class AccountRotator {
 		for (const account of this.accounts) {
 			state.accounts[account.config.email] = {
 				totalRequests: account.totalRequests,
-				cooldownUntil: account.cooldownUntil,
+				cooldownsByModel: { ...account.cooldownsByModel },
 				quotaExhaustedAt: account.quotaExhaustedAt,
 				disabled: account.disabled,
 				flagged: account.flagged,
@@ -512,8 +557,10 @@ export class AccountRotator {
 		}
 
 		const shortestCooldown = this.accounts.reduce<number | null>((bestRemaining, account) => {
-			if (account.disabled || account.flagged || account.cooldownUntil <= now) return bestRemaining;
-			const remaining = account.cooldownUntil - now;
+			if (account.disabled || account.flagged) return bestRemaining;
+			const defaultCooldown = account.cooldownsByModel["__default__"] ?? 0;
+			if (defaultCooldown <= now) return bestRemaining;
+			const remaining = defaultCooldown - now;
 			if (bestRemaining === null || remaining < bestRemaining) return remaining;
 			return bestRemaining;
 		}, null);
@@ -556,8 +603,10 @@ export class AccountRotator {
 		}
 
 		const shortestCooldown = this.accounts.reduce<number | null>((bestRemaining, account) => {
-			if (account.disabled || account.flagged || account.cooldownUntil <= now) return bestRemaining;
-			const remaining = account.cooldownUntil - now;
+			if (account.disabled || account.flagged) return bestRemaining;
+			const defaultCooldown = account.cooldownsByModel["__default__"] ?? 0;
+			if (defaultCooldown <= now) return bestRemaining;
+			const remaining = defaultCooldown - now;
 			if (bestRemaining === null || remaining < bestRemaining) return remaining;
 			return bestRemaining;
 		}, null);
@@ -603,14 +652,226 @@ export class AccountRotator {
 		return shouldRotate;
 	}
 
+	// Record token usage from a completed request
+	recordTokenUsage(model: string | undefined, inputTokens: number, outputTokens: number): void {
+		const now = new Date();
+		const minuteKey = now.toISOString().slice(0, 16); // "2026-04-28T12:05"
+		const modelKey = model ? (resolveQuotaModelKey(model) ?? model) : "unknown";
+
+		// Upsert minute bucket
+		let bucket = this.tokenBuckets.minutes.find(b => b.period === minuteKey);
+		if (!bucket) {
+			bucket = { period: minuteKey, inputTokens: 0, outputTokens: 0, requests: 0, byModel: {} };
+			this.tokenBuckets.minutes.push(bucket);
+		}
+		bucket.inputTokens += inputTokens;
+		bucket.outputTokens += outputTokens;
+		bucket.requests += 1;
+		if (!bucket.byModel[modelKey]) {
+			bucket.byModel[modelKey] = { inputTokens: 0, outputTokens: 0, requests: 0 };
+		}
+		bucket.byModel[modelKey].inputTokens += inputTokens;
+		bucket.byModel[modelKey].outputTokens += outputTokens;
+		bucket.byModel[modelKey].requests += 1;
+
+		// Lazy consolidation
+		this.consolidateTokenBuckets(now);
+		this.saveTokenUsage();
+	}
+
+	recordLatency(model: string | undefined, ttfbMs: number, totalMs: number): void {
+		const modelKey = model ? (resolveQuotaModelKey(model) ?? model) : "unknown";
+		let records = this.latencyRecords.get(modelKey);
+		if (!records) {
+			records = [];
+			this.latencyRecords.set(modelKey, records);
+		}
+		records.push({ ttfbMs, totalMs });
+		if (records.length > AccountRotator.MAX_LATENCY_RECORDS) {
+			records.splice(0, records.length - AccountRotator.MAX_LATENCY_RECORDS);
+		}
+	}
+
+	getLatencyStats(): Record<string, { ttfb: { p50: number; p95: number }; total: { p50: number; p95: number }; count: number }> {
+		const stats: Record<string, { ttfb: { p50: number; p95: number }; total: { p50: number; p95: number }; count: number }> = {};
+		for (const [model, records] of this.latencyRecords) {
+			if (records.length === 0) continue;
+			const ttfbs = records.map(r => r.ttfbMs).sort((a, b) => a - b);
+			const totals = records.map(r => r.totalMs).sort((a, b) => a - b);
+			stats[model] = {
+				ttfb: { p50: ttfbs[Math.floor(ttfbs.length * 0.5)], p95: ttfbs[Math.floor(ttfbs.length * 0.95)] },
+				total: { p50: totals[Math.floor(totals.length * 0.5)], p95: totals[Math.floor(totals.length * 0.95)] },
+				count: records.length,
+			};
+		}
+		return stats;
+	}
+
+	recordRequestLog(entry: { model: string; account: string; statusCode: number; ttfbMs: number; totalMs: number; inputTokens: number; outputTokens: number }): void {
+		this.requestLog.unshift({
+			timestamp: Date.now(),
+			...entry,
+		});
+		if (this.requestLog.length > AccountRotator.MAX_REQUEST_LOG) {
+			this.requestLog.length = AccountRotator.MAX_REQUEST_LOG;
+		}
+	}
+
+	private consolidateTokenBuckets(now: Date): void {
+		const nowMs = now.getTime();
+		const KEEP_MINUTES_MS = 120 * 60 * 1000;  // keep 2h of minutes
+		const KEEP_HOURS_MS = 48 * 3600 * 1000;   // keep 48h of hours
+		const KEEP_DAYS_MS = 60 * 86400 * 1000;   // keep 60d of days
+
+		// Helper: parse period string to epoch ms (approximate, enough for cutoff)
+		const periodToMs = (p: string): number => new Date(p.length <= 7 ? p + "-01" : p).getTime();
+
+		// Minutes older than 2h → consolidate into hours, keep rest
+		const minuteCutoff = nowMs - KEEP_MINUTES_MS;
+		const staleMinutes = this.tokenBuckets.minutes.filter(b => periodToMs(b.period) < minuteCutoff);
+		if (staleMinutes.length > 0) {
+			const byHour = new Map<string, TokenBucket>();
+			for (const m of staleMinutes) {
+				const hKey = m.period.slice(0, 13);
+				let h = byHour.get(hKey);
+				if (!h) {
+					h = { period: hKey, inputTokens: 0, outputTokens: 0, requests: 0, byModel: {} };
+					byHour.set(hKey, h);
+				}
+				this.mergeBucket(h, m);
+			}
+			for (const [hKey, consolidated] of byHour) {
+				const existing = this.tokenBuckets.hours.find(b => b.period === hKey);
+				if (existing) {
+					this.mergeBucket(existing, consolidated);
+				} else {
+					this.tokenBuckets.hours.push(consolidated);
+				}
+			}
+			this.tokenBuckets.minutes = this.tokenBuckets.minutes.filter(b => periodToMs(b.period) >= minuteCutoff);
+		}
+
+		// Hours older than 48h → consolidate into days
+		const hourCutoff = nowMs - KEEP_HOURS_MS;
+		const staleHours = this.tokenBuckets.hours.filter(b => periodToMs(b.period) < hourCutoff);
+		if (staleHours.length > 0) {
+			const byDay = new Map<string, TokenBucket>();
+			for (const h of staleHours) {
+				const dKey = h.period.slice(0, 10);
+				let d = byDay.get(dKey);
+				if (!d) {
+					d = { period: dKey, inputTokens: 0, outputTokens: 0, requests: 0, byModel: {} };
+					byDay.set(dKey, d);
+				}
+				this.mergeBucket(d, h);
+			}
+			for (const [dKey, consolidated] of byDay) {
+				const existing = this.tokenBuckets.days.find(b => b.period === dKey);
+				if (existing) {
+					this.mergeBucket(existing, consolidated);
+				} else {
+					this.tokenBuckets.days.push(consolidated);
+				}
+			}
+			this.tokenBuckets.hours = this.tokenBuckets.hours.filter(b => periodToMs(b.period) >= hourCutoff);
+		}
+
+		// Days older than 60d → consolidate into months
+		const dayCutoff = nowMs - KEEP_DAYS_MS;
+		const staleDays = this.tokenBuckets.days.filter(b => periodToMs(b.period) < dayCutoff);
+		if (staleDays.length > 0) {
+			const byMonth = new Map<string, TokenBucket>();
+			for (const d of staleDays) {
+				const mKey = d.period.slice(0, 7);
+				let mo = byMonth.get(mKey);
+				if (!mo) {
+					mo = { period: mKey, inputTokens: 0, outputTokens: 0, requests: 0, byModel: {} };
+					byMonth.set(mKey, mo);
+				}
+				this.mergeBucket(mo, d);
+			}
+			for (const [mKey, consolidated] of byMonth) {
+				const existing = this.tokenBuckets.months.find(b => b.period === mKey);
+				if (existing) {
+					this.mergeBucket(existing, consolidated);
+				} else {
+					this.tokenBuckets.months.push(consolidated);
+				}
+			}
+			this.tokenBuckets.days = this.tokenBuckets.days.filter(b => periodToMs(b.period) >= dayCutoff);
+		}
+	}
+
+	private mergeBucket(target: TokenBucket, source: TokenBucket): void {
+		target.inputTokens += source.inputTokens;
+		target.outputTokens += source.outputTokens;
+		target.requests += source.requests;
+		for (const [model, data] of Object.entries(source.byModel)) {
+			if (!target.byModel[model]) {
+				target.byModel[model] = { inputTokens: 0, outputTokens: 0, requests: 0 };
+			}
+			target.byModel[model].inputTokens += data.inputTokens;
+			target.byModel[model].outputTokens += data.outputTokens;
+			target.byModel[model].requests += data.requests;
+		}
+	}
+
+	private saveTokenUsage(): void {
+		try {
+			writeFileSync(TOKENS_FILE, JSON.stringify(this.tokenBuckets, null, 2), "utf-8");
+		} catch { /* best effort */ }
+	}
+
+	getTokenUsage(): TokenUsageData {
+		const all = [...this.tokenBuckets.minutes, ...this.tokenBuckets.hours, ...this.tokenBuckets.days, ...this.tokenBuckets.months];
+		let totalInputTokens = 0;
+		let totalOutputTokens = 0;
+		let totalRequests = 0;
+		const modelTotals: Record<string, { input: number; output: number }> = {};
+		for (const b of all) {
+			totalInputTokens += b.inputTokens;
+			totalOutputTokens += b.outputTokens;
+			totalRequests += b.requests;
+			for (const [model, data] of Object.entries(b.byModel)) {
+				if (!modelTotals[model]) modelTotals[model] = { input: 0, output: 0 };
+				modelTotals[model].input += data.inputTokens;
+				modelTotals[model].output += data.outputTokens;
+			}
+		}
+
+		// Calculate savings
+		let totalUsd = 0;
+		const byModel: TokenUsageData["savings"]["byModel"] = {};
+		for (const [model, totals] of Object.entries(modelTotals)) {
+			const pricing = MODEL_PRICING[model];
+			if (!pricing) continue;
+			const inputUsd = (totals.input / 1_000_000) * pricing.inputPer1M;
+			const outputUsd = (totals.output / 1_000_000) * pricing.outputPer1M;
+			byModel[model] = { inputUsd, outputUsd, totalUsd: inputUsd + outputUsd };
+			totalUsd += inputUsd + outputUsd;
+		}
+
+		return {
+			minutes: this.tokenBuckets.minutes.slice().sort((a, b) => a.period.localeCompare(b.period)),
+			hours: this.tokenBuckets.hours.slice().sort((a, b) => a.period.localeCompare(b.period)),
+			days: this.tokenBuckets.days.slice().sort((a, b) => a.period.localeCompare(b.period)),
+			months: this.tokenBuckets.months.slice().sort((a, b) => a.period.localeCompare(b.period)),
+			totalInputTokens,
+			totalOutputTokens,
+			totalRequests,
+			savings: { totalUsd, byModel },
+		};
+	}
+
 	// Mark an account as exhausted (429 or quota exceeded)
-	markExhausted(account: AccountRuntime, cooldownMs: number): void {
+	markExhausted(account: AccountRuntime, model: string | undefined, cooldownMs: number): void {
 		const now = Date.now();
-		account.cooldownUntil = now + cooldownMs;
+		const modelKey = model ? (resolveQuotaModelKey(model) ?? "__default__") : "__default__";
+		account.cooldownsByModel[modelKey] = now + cooldownMs;
 		account.quotaExhaustedAt = now;
 
 			this.log(
-				`${account.config.label || account.config.email}: EXHAUSTED, cooldown ${Math.ceil(cooldownMs / 1000)}s`,
+				`${account.config.label || account.config.email} [${modelKey}]: EXHAUSTED, cooldown ${Math.ceil(cooldownMs / 1000)}s`,
 				"warn",
 			);
 		this.saveState();
@@ -637,7 +898,7 @@ export class AccountRotator {
 		account.flagged = false;
 		account.consecutiveErrors = 0;
 		account.lastError = null;
-		account.cooldownUntil = 0;
+		account.cooldownsByModel = {};
 		this.saveState();
 		this.log(`${email}: re-enabled`);
 		return true;
@@ -737,12 +998,15 @@ export class AccountRotator {
 	private isAvailable(account: AccountRuntime, now: number): boolean {
 		if (account.disabled) return false;
 		if (account.flagged) return false;
-		if (account.cooldownUntil > now) return false;
+		const defaultCooldown = account.cooldownsByModel["__default__"] ?? 0;
+		if (defaultCooldown > now) return false;
 		return true;
 	}
 
 	private isAvailableForModel(account: AccountRuntime, modelKey: string, now: number): boolean {
 		if (!this.isAvailable(account, now)) return false;
+		const modelCooldown = account.cooldownsByModel[modelKey] ?? 0;
+		if (modelCooldown > now) return false;
 		if ((account.inFlightByModel[modelKey] ?? 0) >= (this.config.maxConcurrentRequestsPerAccount ?? 1)) return false;
 		return true;
 	}
@@ -811,13 +1075,16 @@ export class AccountRotator {
 			}
 
 			let status: AccountStatus["status"];
+			const inCooldownModels = Object.entries(a.cooldownsByModel).filter(([_, ts]) => ts > now);
+			const allModelsInCooldown = inCooldownModels.length > 0 && inCooldownModels.length >= Object.keys(a.cooldownsByModel).length; // rough heuristic
+			
 			if (a.flagged) {
 				status = "flagged";
 			} else if (a.disabled) {
 				status = "disabled";
 			} else if (a.consecutiveErrors > 0 && !a.disabled) {
 				status = "error";
-			} else if (a.cooldownUntil > now) {
+			} else if (inCooldownModels.length > 0) {
 				status = "cooldown";
 			} else if (activeForModels.length > 0) {
 				status = "active";
@@ -832,8 +1099,7 @@ export class AccountRotator {
 				activeForModels,
 				requestsSinceRotation: a.requestsSinceRotation,
 				totalRequests: a.totalRequests,
-				cooldownUntil: a.cooldownUntil,
-				cooldownRemaining: Math.max(0, a.cooldownUntil - now),
+				cooldownsByModel: a.cooldownsByModel,
 				lastUsed: a.lastUsed,
 				lastError: a.lastError,
 					consecutiveErrors: a.consecutiveErrors,
@@ -866,6 +1132,9 @@ export class AccountRotator {
 			accounts,
 			proAdvisor: this.getProAdvisor(),
 			recentEvents: [...this.recentEvents],
+			requestLog: this.requestLog.slice(0, 100),
+			tokenUsage: this.getTokenUsage(),
+			latencyStats: this.getLatencyStats(),
 		};
 	}
 
@@ -893,7 +1162,7 @@ export class AccountRotator {
 				tokenExpires: 0,
 				requestsSinceRotation: 0,
 				totalRequests: 0,
-				cooldownUntil: 0,
+				cooldownsByModel: {},
 				quotaExhaustedAt: 0,
 				quota: [],
 				lastQuotaPoll: 0,
@@ -1063,8 +1332,9 @@ export class AccountRotator {
 		}).length;
 		const availableCount = this.allowFreshWindowStarts ? rawAvailableCount : timedAvailableCount;
 		const shortestCooldown = accounts
-			.filter((a) => a.cooldownRemaining > 0)
-			.reduce((best, account) => (best === 0 || account.cooldownRemaining < best ? account.cooldownRemaining : best), 0);
+			.flatMap((a) => Object.values(a.cooldownsByModel).map(ts => Math.max(0, ts - now)))
+			.filter((rem) => rem > 0)
+			.reduce((best, rem) => (best === 0 || rem < best ? rem : best), 0);
 		const pauseRemaining = Math.max(0, this.protectivePauseUntil - now);
 		const freshOnlyBlocked = !this.allowFreshWindowStarts && rawAvailableCount > 0 && timedAvailableCount === 0;
 
