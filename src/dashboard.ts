@@ -905,10 +905,143 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     body { padding: 18px; }
     .header { flex-direction: column; align-items: stretch; }
     .header-actions { justify-content: flex-start; }
+    .update-banner { flex-direction: column; align-items: stretch; gap: 10px; }
+    .update-banner-actions { justify-content: flex-start; }
+  }
+
+  .update-banner {
+    display: none;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 18px;
+    margin-bottom: 16px;
+    border-radius: var(--radius);
+    background: linear-gradient(135deg, rgba(124, 92, 252, 0.12), rgba(167, 139, 250, 0.08));
+    border: 1px solid rgba(124, 92, 252, 0.35);
+    animation: bannerSlideIn 0.4s ease-out;
+  }
+
+  @keyframes bannerSlideIn {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .update-banner.visible { display: flex; }
+  .update-banner.success {
+    background: linear-gradient(135deg, rgba(52, 211, 153, 0.12), rgba(52, 211, 153, 0.06));
+    border-color: rgba(52, 211, 153, 0.35);
+  }
+
+  .update-badge {
+    font-size: 9px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    padding: 3px 8px;
+    border-radius: 6px;
+    background: var(--accent);
+    color: #fff;
+    flex-shrink: 0;
+    animation: badgePulse 2s ease-in-out infinite;
+  }
+
+  .update-banner.success .update-badge {
+    background: var(--green);
+    animation: none;
+  }
+
+  @keyframes badgePulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+  }
+
+  .update-message {
+    flex: 1;
+    font-size: 13px;
+    color: var(--text);
+    min-width: 0;
+  }
+
+  .update-message strong {
+    color: var(--accent);
+  }
+
+  .update-banner.success .update-message strong {
+    color: var(--green);
+  }
+
+  .update-banner-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-shrink: 0;
+  }
+
+  .btn-update {
+    font-size: 11px;
+    padding: 5px 14px;
+    border: 1px solid var(--accent);
+    background: var(--accent);
+    color: #fff;
+    border-radius: 6px;
+    cursor: pointer;
+    font-family: var(--font);
+    font-weight: 600;
+    transition: opacity 0.2s, transform 0.2s;
+  }
+
+  .btn-update:hover {
+    opacity: 0.9;
+    transform: translateY(-1px);
+  }
+
+  .btn-update:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+  }
+
+  .btn-update-link {
+    font-size: 11px;
+    padding: 5px 14px;
+    border: 1px solid rgba(124, 92, 252, 0.3);
+    background: transparent;
+    color: var(--accent);
+    border-radius: 6px;
+    cursor: pointer;
+    font-family: var(--font);
+    font-weight: 500;
+    text-decoration: none;
+    transition: background 0.2s;
+  }
+
+  .btn-update-link:hover {
+    background: rgba(124, 92, 252, 0.08);
+  }
+
+  .btn-update-dismiss {
+    font-size: 11px;
+    padding: 5px 10px;
+    border: none;
+    background: transparent;
+    color: var(--text-dim);
+    cursor: pointer;
+    font-family: var(--font);
+    transition: color 0.2s;
+  }
+
+  .btn-update-dismiss:hover {
+    color: var(--text);
   }
 </style>
 </head>
 <body>
+
+<div class="update-banner" id="updateBanner">
+  <span class="update-badge" id="updateBadgeLabel">NEW</span>
+  <div class="update-message" id="updateMessage"></div>
+  <div class="update-banner-actions" id="updateActions"></div>
+</div>
 
 <div class="header">
   <div class="header-main">
@@ -1268,6 +1401,7 @@ function renderAccounts(data) {
     '</div>' +
     '<div class="ops-warning">' + freshPolicyHint + '</div>';
 
+  renderUpdateBanner(data.updateInfo);
   renderAttentionPanel(data);
   renderTokenChart(data.tokenUsage);
   renderHeatmap(data.tokenUsage);
@@ -2352,6 +2486,95 @@ if (!localStorage.getItem('hideDonationPopup')) {
   setTimeout(function() {
     openModal('donationModal');
   }, 1000);
+}
+
+// ── Update Banner ──
+function renderUpdateBanner(updateInfo) {
+  var banner = document.getElementById('updateBanner');
+  var message = document.getElementById('updateMessage');
+  var actions = document.getElementById('updateActions');
+  var badgeLabel = document.getElementById('updateBadgeLabel');
+
+  if (!updateInfo || !banner || !message || !actions) return;
+
+  // Check if update was already applied (waiting for restart)
+  var pendingRestart = localStorage.getItem('updatePendingRestart');
+  if (pendingRestart) {
+    banner.className = 'update-banner visible success';
+    badgeLabel.textContent = '✓';
+    message.innerHTML = '<strong>Updated to v' + escapeHtml(pendingRestart) + '</strong> — Restart the process to apply the new version.';
+    actions.innerHTML = '<button class="btn-update-dismiss" onclick="clearPendingRestart()">Dismiss</button>';
+    return;
+  }
+
+  if (!updateInfo.updateAvailable || !updateInfo.latestVersion) {
+    banner.className = 'update-banner';
+    return;
+  }
+
+  // Check if user dismissed this specific version
+  var dismissed = localStorage.getItem('updateDismissed');
+  if (dismissed === updateInfo.latestVersion) {
+    banner.className = 'update-banner';
+    return;
+  }
+
+  banner.className = 'update-banner visible';
+  badgeLabel.textContent = 'NEW';
+  message.innerHTML = '🚀 Version <strong>v' + escapeHtml(updateInfo.latestVersion) + '</strong> is available ' +
+    '<span style="color:var(--text-dim)">(current: v' + escapeHtml(updateInfo.currentVersion) + ')</span>';
+  actions.innerHTML =
+    '<a class="btn-update-link" href="https://github.com/tuxevil/pi-antigravity-rotator/releases" target="_blank">Changelog</a>' +
+    '<button class="btn-update" id="btnDoUpdate" onclick="doSelfUpdate()">Update Now</button>' +
+    '<button class="btn-update-dismiss" onclick="dismissUpdate(\\'' + escapeHtml(updateInfo.latestVersion) + '\\')">Dismiss</button>';
+}
+
+async function doSelfUpdate() {
+  var btn = document.getElementById('btnDoUpdate');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Updating...';
+  }
+  try {
+    var res = await authFetch('/api/self-update', { method: 'POST' });
+    var result = await res.json();
+    var banner = document.getElementById('updateBanner');
+    var message = document.getElementById('updateMessage');
+    var actions = document.getElementById('updateActions');
+    var badgeLabel = document.getElementById('updateBadgeLabel');
+    if (result.ok) {
+      localStorage.setItem('updatePendingRestart', result.to);
+      banner.className = 'update-banner visible success';
+      badgeLabel.textContent = '✓';
+      message.innerHTML = '<strong>Updated to v' + escapeHtml(result.to) + '</strong> — Restart the process to apply the new version.';
+      actions.innerHTML = '<button class="btn-update-dismiss" onclick="clearPendingRestart()">Dismiss</button>';
+    } else {
+      message.innerHTML = '<strong style="color:var(--red)">Update failed</strong> — ' + escapeHtml(result.message || 'Unknown error');
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = 'Retry';
+      }
+    }
+  } catch (err) {
+    var message2 = document.getElementById('updateMessage');
+    if (message2) message2.innerHTML = '<strong style="color:var(--red)">Update failed</strong> — ' + escapeHtml(String(err));
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Retry';
+    }
+  }
+}
+
+function dismissUpdate(version) {
+  localStorage.setItem('updateDismissed', version);
+  var banner = document.getElementById('updateBanner');
+  if (banner) banner.className = 'update-banner';
+}
+
+function clearPendingRestart() {
+  localStorage.removeItem('updatePendingRestart');
+  var banner = document.getElementById('updateBanner');
+  if (banner) banner.className = 'update-banner';
 }
 </script>
 </body>

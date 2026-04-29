@@ -18,6 +18,7 @@ Multi-account rotation proxy for Google Antigravity. Distributes API usage acros
 - **Pro Family Advisor** -- Scans your account pool and alerts you if there are major imbalances (like some accounts never getting used because of routing bias), giving you actionable steps to optimize token distribution
 - **Advanced Telemetry & Statistics** -- Track exactly how much USD you save compared to a paid API plan, predict quota depletion with the Forecast grid, view Latency tracking (p50/p95), and explore 60-day historical usage heatmaps
 - **Web dashboard** -- Real-time view of model routing table, per-account quota bars with per-model timers, and flagged account alerts
+- **Auto-update notifications** -- The dashboard checks npm for new releases every 30 minutes and shows a banner with one-click update when a newer version is available
 - **State persistence** -- Survives restarts; routing assignments, per-model request counters, cooldowns, and flags are saved to disk
 
 ## Quick Start
@@ -267,6 +268,7 @@ pi-antigravity-rotator start --config-dir /path/to/config
 | `POST` | `/api/settings/fresh-window-starts/off` | Block opening new `idle`/fresh windows globally |
 | `POST` | `/api/account-fresh-window-starts/<email>/on` | Allow one account to override the global fresh-window block |
 | `POST` | `/api/account-fresh-window-starts/<email>/off` | Return one account to the global fresh-window policy |
+| `POST` | `/api/self-update` | Trigger npm self-update to latest version (admin-only) |
 | `POST` | `/v1internal:streamGenerateContent` | Proxy endpoint (used by pi) |
 
 If `PI_ROTATOR_ADMIN_TOKEN` is set, dashboard/API requests must include either `Authorization: Bearer <token>`, `X-Rotator-Admin-Token: <token>`, or `?token=<token>` for browser dashboard access. The pi proxy endpoint remains unauthenticated so existing agents keep working.

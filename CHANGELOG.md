@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.9.0] - 2026-04-29
+
+### Added
+- **Version Check & Auto-Update**: The dashboard now checks the npm registry every 30 minutes for new releases. When a newer version is available, a gradient banner appears at the top with the current and latest version, a link to the GitHub changelog, and a one-click "Update Now" button. The update runs `npm install -g pi-antigravity-rotator@latest` (auto-detects global vs local installs). After updating, a green "Restart required" notice is shown. The banner can be dismissed per-version (stored in `localStorage`). Version checks fail silently when offline.
+- **Self-Update API**: New `POST /api/self-update` endpoint (admin-only) that triggers the npm update from the dashboard.
+
 ## [1.8.6] - 2026-04-29
 
 ### Fixed

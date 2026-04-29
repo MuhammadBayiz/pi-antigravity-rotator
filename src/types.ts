@@ -189,6 +189,14 @@ export interface PersistedState {
 	>;
 }
 
+// Version check info for dashboard
+export interface UpdateInfo {
+	currentVersion: string;
+	latestVersion: string | null;
+	updateAvailable: boolean;
+	checkedAt: number;
+}
+
 // Dashboard API response
 export interface StatusResponse {
 	proxyPort: number;
@@ -227,6 +235,7 @@ export interface StatusResponse {
 	requestLog: RequestLogEntry[];
 	tokenUsage: TokenUsageData;
 	latencyStats: Record<string, { ttfb: { p50: number; p95: number }; total: { p50: number; p95: number }; count: number }>;
+	updateInfo?: UpdateInfo;
 }
 
 export interface AccountStatus {

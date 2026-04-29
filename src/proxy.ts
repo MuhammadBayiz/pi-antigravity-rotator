@@ -20,6 +20,7 @@ import { validateProxyRequestBody } from "./validators.js";
 import { logger } from "./logger.js";
 import { trackFeature, reportFlagEvent, FLAG_PATTERNS, type FlagPattern } from "./telemetry.js";
 import type { FlagEventData } from "./telemetry.js";
+import { startVersionChecker, performSelfUpdate } from "./version-check.js";
 
 const proxyLogger = logger.child("proxy");
 
@@ -597,6 +598,7 @@ function flattenHeaders(headers: IncomingMessage["headers"]): Record<string, str
 }
 
 export function startProxy(rotator: AccountRotator, port: number): void {
+	startVersionChecker();
 	const sseClients = new Set<ServerResponse>();
 	let sseBroadcastTimer: ReturnType<typeof setTimeout> | null = null;
 	const SSE_THROTTLE_MS = 1000; // max 1 push/second
@@ -736,6 +738,20 @@ export function startProxy(rotator: AccountRotator, port: number): void {
 			const email = decodeURIComponent(rest.slice(0, lastSlash));
 			const enabled = rest.slice(lastSlash + 1) === "on";
 			serveAccountFreshWindowStartsApi(res, rotator, email, enabled);
+			return;
+		}
+
+		if (method === "POST" && pathname === "/api/self-update") {
+			if (!requireAdmin(req, res)) return;
+			trackFeature("selfUpdate");
+			try {
+				const result = performSelfUpdate();
+				res.writeHead(result.ok ? 200 : 500, { "Content-Type": "application/json" });
+				res.end(JSON.stringify(result));
+			} catch (err) {
+				res.writeHead(500, { "Content-Type": "application/json" });
+				res.end(JSON.stringify({ ok: false, message: String(err) }));
+			}
 			return;
 		}
 

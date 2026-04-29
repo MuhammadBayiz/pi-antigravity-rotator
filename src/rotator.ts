@@ -31,6 +31,7 @@ import { saveAccountsConfig } from "./account-store.js";
 import { getOAuthClientConfig } from "./oauth.js";
 import { fetchWithRetry } from "./fetch-with-retry.js";
 import { logger } from "./logger.js";
+import { getUpdateInfo } from "./version-check.js";
 
 const rotatorLogger = logger.child("rotator");
 
@@ -1266,6 +1267,7 @@ export class AccountRotator {
 			requestLog: this.requestLog.slice(0, 100),
 			tokenUsage: this.getTokenUsage(),
 			latencyStats: this.getLatencyStats(),
+			updateInfo: getUpdateInfo(),
 		};
 	}
 
