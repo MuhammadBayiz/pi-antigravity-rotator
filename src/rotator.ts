@@ -38,6 +38,14 @@ const rotatorLogger = logger.child("rotator");
 const STATE_FILE = getStatePath();
 const TOKENS_FILE = STATE_FILE.replace("state.json", "token-usage.json");
 
+function currentUtcDay(now = Date.now()): string {
+	return new Date(now).toISOString().slice(0, 10);
+}
+
+function projectModelKey(projectId: string, modelKey: string): string {
+	return `${projectId}::${modelKey}`;
+}
+
 export class AccountRotator {
 	private accounts: AccountRuntime[] = [];
 	// Per-model active account tracking
@@ -56,6 +64,10 @@ export class AccountRotator {
 	private static readonly MAX_LATENCY_RECORDS = 200;
 	private requestLog: StatusResponse["requestLog"] = [];
 	private static readonly MAX_REQUEST_LOG = 200;
+	private safetyDay = currentUtcDay();
+	private projectRequests: Record<string, number> = {};
+	private projectModelBreakers: Record<string, number> = {};
+	private provider429Events: Array<{ ts: number; projectId: string; modelKey: string; account: string }> = [];
 
 	constructor(private config: Config) {
 		this.initAccounts();
@@ -83,6 +95,8 @@ export class AccountRotator {
 			inFlightByModel: {},
 			allowFreshWindowStartsOverride: false,
 			quotaWindows: {},
+			dailyRequestCount: 0,
+			dailyRequestDay: currentUtcDay(),
 		}));
 	}
 
@@ -109,11 +123,18 @@ export class AccountRotator {
 			this.protectivePauseUntil = state.protectivePauseUntil ?? 0;
 			this.protectivePauseReason = state.protectivePauseReason ?? null;
 			this.allowFreshWindowStarts = state.allowFreshWindowStarts ?? true;
+			this.safetyDay = state.safety?.day ?? currentUtcDay();
+			this.projectRequests = state.safety?.projectRequests ?? {};
+			this.projectModelBreakers = state.safety?.projectModelBreakers ?? {};
+			this.provider429Events = state.safety?.provider429Events ?? [];
+			this.rollDailySafetyIfNeeded(Date.now());
 
 			for (const account of this.accounts) {
 				const saved = state.accounts[account.config.email];
 				if (saved) {
 					account.totalRequests = saved.totalRequests;
+					account.dailyRequestCount = saved.dailyRequestCount ?? 0;
+					account.dailyRequestDay = saved.dailyRequestDay ?? currentUtcDay();
 					account.cooldownsByModel = saved.cooldownsByModel ?? {};
 					if (saved.cooldownUntil !== undefined && Object.keys(account.cooldownsByModel).length === 0) {
 						// legacy migration: apply global cooldown to default
@@ -186,11 +207,19 @@ export class AccountRotator {
 			protectivePauseUntil: this.protectivePauseUntil,
 			protectivePauseReason: this.protectivePauseReason,
 			allowFreshWindowStarts: this.allowFreshWindowStarts,
+			safety: {
+				day: this.safetyDay,
+				projectRequests: { ...this.projectRequests },
+				projectModelBreakers: { ...this.projectModelBreakers },
+				provider429Events: [...this.provider429Events],
+			},
 			accounts: {},
 		};
 		for (const account of this.accounts) {
 			state.accounts[account.config.email] = {
 				totalRequests: account.totalRequests,
+				dailyRequestCount: account.dailyRequestCount,
+				dailyRequestDay: account.dailyRequestDay,
 				cooldownsByModel: { ...account.cooldownsByModel },
 				quotaExhaustedAt: account.quotaExhaustedAt,
 				disabled: account.disabled,
@@ -543,6 +572,54 @@ export class AccountRotator {
 			this.countModelAssignment(modelKey);
 		}
 		return account;
+	}
+
+	private rollDailySafetyIfNeeded(now: number): void {
+		const day = currentUtcDay(now);
+		if (this.safetyDay === day) return;
+		this.safetyDay = day;
+		this.projectRequests = {};
+		for (const account of this.accounts) {
+			account.dailyRequestDay = day;
+			account.dailyRequestCount = 0;
+		}
+	}
+
+	private getAccountDailyCount(account: AccountRuntime, now: number): number {
+		const day = currentUtcDay(now);
+		if (account.dailyRequestDay !== day) {
+			account.dailyRequestDay = day;
+			account.dailyRequestCount = 0;
+		}
+		return account.dailyRequestCount;
+	}
+
+	private getProjectDailyCount(projectId: string, now: number): number {
+		this.rollDailySafetyIfNeeded(now);
+		return this.projectRequests[projectId] ?? 0;
+	}
+
+	private getProjectInFlight(modelKey: string, projectId: string): number {
+		return this.accounts
+			.filter((account) => account.config.projectId === projectId)
+			.reduce((sum, account) => sum + (account.inFlightByModel[modelKey] ?? 0), 0);
+	}
+
+	private isProjectModelBreakerActive(projectId: string, modelKey: string, now: number): boolean {
+		const until = this.projectModelBreakers[projectModelKey(projectId, modelKey)] ?? 0;
+		if (until <= now) {
+			if (until > 0) delete this.projectModelBreakers[projectModelKey(projectId, modelKey)];
+			return false;
+		}
+		return true;
+	}
+
+	private getUnavailableReasonForModel(account: AccountRuntime, modelKey: string, now: number): string | null {
+		if (this.isProjectModelBreakerActive(account.config.projectId, modelKey, now)) return "project circuit breaker active";
+		if (this.getProjectInFlight(modelKey, account.config.projectId) >= (this.config.maxConcurrentRequestsPerProjectModel ?? 1)) return "project concurrency limit reached";
+		if (this.getAccountDailyCount(account, now) >= (this.config.dailyAccountStopRequests ?? 350)) return "daily account budget exhausted";
+		if (this.getProjectDailyCount(account.config.projectId, now) >= (this.config.dailyProjectStopRequests ?? 1200)) return "daily project budget exhausted";
+		return null;
 	}
 
 	// =========================================================================
@@ -1001,11 +1078,56 @@ export class AccountRotator {
 		account.cooldownsByModel[modelKey] = now + cooldownMs;
 		account.quotaExhaustedAt = now;
 
+		this.log(
+			`${account.config.label || account.config.email} [${modelKey}]: EXHAUSTED, cooldown ${Math.ceil(cooldownMs / 1000)}s`,
+			"warn",
+		);
+		this.saveState();
+	}
+
+	recordProvider429(account: AccountRuntime, model: string | undefined, cooldownMs: number): void {
+		const now = Date.now();
+		const modelKey = model ? (resolveQuotaModelKey(model) ?? "__default__") : "__default__";
+		const windowMs = this.config.projectCircuitBreakerWindowMs ?? 10 * 60 * 1000;
+		const threshold = this.config.projectCircuitBreaker429Threshold ?? 3;
+		const breakerCooldownMs = this.config.projectCircuitBreakerCooldownMs ?? 60 * 60 * 1000;
+		const projectId = account.config.projectId;
+		this.provider429Events = this.provider429Events
+			.filter((event) => now - event.ts <= windowMs)
+			.concat({ ts: now, projectId, modelKey, account: account.config.email });
+		const uniqueAccounts = new Set(
+			this.provider429Events
+				.filter((event) => event.projectId === projectId && event.modelKey === modelKey)
+				.map((event) => event.account),
+		);
+		if (uniqueAccounts.size >= threshold) {
+			const until = now + Math.max(cooldownMs, breakerCooldownMs);
+			this.projectModelBreakers[projectModelKey(projectId, modelKey)] = until;
 			this.log(
-				`${account.config.label || account.config.email} [${modelKey}]: EXHAUSTED, cooldown ${Math.ceil(cooldownMs / 1000)}s`,
+				`[${modelKey}] Project circuit breaker active for projectId=${projectId} after ${uniqueAccounts.size} accounts hit 429; cooldown ${Math.ceil((until - now) / 1000)}s`,
 				"warn",
 			);
+		}
 		this.saveState();
+	}
+
+	recordUpstreamAttempt(account: AccountRuntime): void {
+		const now = Date.now();
+		this.rollDailySafetyIfNeeded(now);
+		this.getAccountDailyCount(account, now);
+		account.dailyRequestCount++;
+		this.projectRequests[account.config.projectId] = (this.projectRequests[account.config.projectId] ?? 0) + 1;
+		this.saveState();
+	}
+
+	getSafetyJitterMs(account: AccountRuntime): number {
+		const now = Date.now();
+		const accountSlow = this.getAccountDailyCount(account, now) >= (this.config.dailyAccountSlowRequests ?? 250);
+		const projectSlow = this.getProjectDailyCount(account.config.projectId, now) >= (this.config.dailyProjectSlowRequests ?? 900);
+		if (!accountSlow && !projectSlow) return 0;
+		const min = this.config.slowModeJitterMinMs ?? 8_000;
+		const max = Math.max(min, this.config.slowModeJitterMaxMs ?? 25_000);
+		return Math.floor(min + Math.random() * (max - min + 1));
 	}
 
 	markError(account: AccountRuntime, error: string): void {
@@ -1139,6 +1261,7 @@ export class AccountRotator {
 		const modelCooldown = account.cooldownsByModel[modelKey] ?? 0;
 		if (modelCooldown > now) return false;
 		if ((account.inFlightByModel[modelKey] ?? 0) >= (this.config.maxConcurrentRequestsPerAccount ?? 1)) return false;
+		if (this.getUnavailableReasonForModel(account, modelKey, now)) return false;
 		return true;
 	}
 
@@ -1348,6 +1471,8 @@ export class AccountRotator {
 					inFlightByModel: {},
 				allowFreshWindowStartsOverride: false,
 					quotaWindows: {},
+				dailyRequestCount: 0,
+				dailyRequestDay: currentUtcDay(),
 			};
 			this.accounts.push(runtime);
 			this.config.accounts.push(runtime.config);

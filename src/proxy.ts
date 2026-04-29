@@ -26,7 +26,13 @@ const proxyLogger = logger.child("proxy");
 
 const MAX_ENDPOINT_RETRIES = 3;
 const MAX_COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes max cooldown
+const RESOURCE_EXHAUSTED_COOLDOWN_MS = 30 * 60 * 1000; // Stop hammering provider-side daily/request buckets
 const STREAM_IDLE_TIMEOUT_MS = 2 * 60 * 1000; // Release account if a stream goes silent.
+const LARGE_CONTEXT_WARN_BYTES = 1 * 1024 * 1024;
+
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 interface RequestBody {
 	project: string;
@@ -95,6 +101,11 @@ function extractRetryDelay(errorText: string, headers: Headers): number {
 
 function capCooldown(ms: number): number {
 	return Math.min(ms, MAX_COOLDOWN_MS);
+}
+
+function isResourceExhausted(errorText: string): boolean {
+	const lower = errorText.toLowerCase();
+	return lower.includes("resource_exhausted") || lower.includes("resource exhausted");
 }
 
 function formatError(err: unknown): string {
@@ -180,8 +191,8 @@ async function streamResponseBody(
 		const resetIdleTimer = (): void => {
 			if (idleTimer) clearTimeout(idleTimer);
 			idleTimer = setTimeout(() => {
-				nodeStream.destroy(new Error(`stream idle for ${Math.round(STREAM_IDLE_TIMEOUT_MS / 1000)}s`));
 				finish(`idle timeout after ${Math.round(STREAM_IDLE_TIMEOUT_MS / 1000)}s`);
+				if (!nodeStream.destroyed) nodeStream.destroy();
 			}, STREAM_IDLE_TIMEOUT_MS);
 		};
 
@@ -346,6 +357,9 @@ async function handleProxyRequest(
 	const proxyLog = (msg: string, level: "info" | "warn" | "error" = "info"): void => {
 		log(msg, rotator, level);
 	};
+	if (bodyBuffer.length > LARGE_CONTEXT_WARN_BYTES) {
+		proxyLog(`[${body.model}] Large request body ${bodyBuffer.length} bytes; high context pressure increases rate-limit/flag risk`, "warn");
+	}
 
 	const sendNoAccountsAvailable = (reason: string): void => {
 		proxyLog(`[${body.model}] No healthy account available: ${reason}`, "warn");
@@ -392,22 +406,41 @@ async function handleProxyRequest(
 		};
 
 		try {
+			const jitterMs = rotator.getSafetyJitterMs(account);
+			if (jitterMs > 0) {
+				proxyLog(`[${requestId}] Safety slow-mode jitter ${jitterMs}ms for account/project daily budget pressure`, "warn");
+				await sleep(jitterMs);
+			}
+			rotator.recordUpstreamAttempt(account);
 			const response = await forwardRequest(account, { ...body }, flattenHeaders(req.headers));
 
 			if (response.status === 429) {
 				const errorText = await response.text().catch(() => "");
-				const cooldownMs = capCooldown(extractRetryDelay(errorText, response.headers));
-				proxyLog(`[${label}] 429 rate limited, cooldown ${Math.ceil(cooldownMs / 1000)}s`, "warn");
+				const providerResourceExhausted = isResourceExhausted(errorText);
+				const cooldownMs = providerResourceExhausted
+					? RESOURCE_EXHAUSTED_COOLDOWN_MS
+					: capCooldown(extractRetryDelay(errorText, response.headers));
+				proxyLog(
+					`[${label}] 429 rate limited${providerResourceExhausted ? " (RESOURCE_EXHAUSTED)" : ""}, cooldown ${Math.ceil(cooldownMs / 1000)}s. Error text: ${errorText.slice(0, 300)}`,
+					"warn",
+				);
 				recordOutcome(429);
-				logRequestEnd(429, `cooldownMs=${cooldownMs}`);
+				logRequestEnd(429, `cooldownMs=${cooldownMs}${providerResourceExhausted ? " resourceExhausted=true" : ""}`);
 				rotator.markExhausted(account, body.model, cooldownMs);
-				res.writeHead(503, {
+				rotator.recordProvider429(account, body.model, cooldownMs);
+
+				// Safety first: do NOT immediately retry another account on 429.
+				// Provider-side 429s can represent daily/request buckets or shared project pressure;
+				// cascading retries burn the full pool and increase ban/flag risk.
+				res.writeHead(429, {
 					"Content-Type": "application/json",
 					"Retry-After": String(Math.ceil(cooldownMs / 1000)),
 				});
 				res.end(JSON.stringify({
-					error: "Rate limited",
-					reason: `${label} was rate limited; not retrying another account for this request`,
+					error: providerResourceExhausted ? "Resource exhausted" : "Rate limited",
+					reason: providerResourceExhausted
+						? `${label} hit provider RESOURCE_EXHAUSTED; not retrying another account to avoid pool-wide hammering`
+						: `${label} was rate limited; not retrying another account for account-safety`,
 					model: body.model,
 					account: label,
 					retryAfterMs: cooldownMs,

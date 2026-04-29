@@ -25,6 +25,20 @@ export interface Config {
 	proSlots?: number;
 	// Hard cap on parallel requests per account. Conservative default is 1.
 	maxConcurrentRequestsPerAccount?: number;
+	// Hard cap on parallel requests per projectId/model. Conservative default is 1.
+	maxConcurrentRequestsPerProjectModel?: number;
+	// Pause projectId/model when several accounts hit provider 429 in a short window. Defaults: 3 hits / 10min / 60min pause.
+	projectCircuitBreaker429Threshold?: number;
+	projectCircuitBreakerWindowMs?: number;
+	projectCircuitBreakerCooldownMs?: number;
+	// Daily safety budgets. Defaults: account slow 250, account stop 350, project slow 900, project stop 1200.
+	dailyAccountSlowRequests?: number;
+	dailyAccountStopRequests?: number;
+	dailyProjectSlowRequests?: number;
+	dailyProjectStopRequests?: number;
+	// Add small delay before upstream call when an account/project is in slow mode. Default: 8-25s.
+	slowModeJitterMinMs?: number;
+	slowModeJitterMaxMs?: number;
 	// Pause all routing after a serious provider flag. Default: 6h.
 	protectivePauseMs?: number;
 	// Use request-count rotation only before quota data is available. Default: true.
@@ -139,6 +153,8 @@ export interface AccountRuntime {
 	inFlightByModel: Record<string, number>;
 	allowFreshWindowStartsOverride: boolean;
 	quotaWindows: QuotaWindowHistory;
+	dailyRequestCount: number;
+	dailyRequestDay: string;
 }
 
 // Per-model rotation state tracked by the rotator
@@ -164,6 +180,13 @@ export interface DualWindowTracker {
 // Per-account quota window tracking: keyed by model key
 export type QuotaWindowHistory = Record<string, DualWindowTracker>;
 
+export interface PersistedSafetyState {
+	day: string;
+	projectRequests: Record<string, number>;
+	projectModelBreakers: Record<string, number>;
+	provider429Events: Array<{ ts: number; projectId: string; modelKey: string; account: string }>;
+}
+
 export interface PersistedState {
 	// Per-model active account index
 	modelAccounts: Record<string, number>;
@@ -174,10 +197,13 @@ export interface PersistedState {
 	protectivePauseUntil?: number;
 	protectivePauseReason?: string | null;
 	allowFreshWindowStarts?: boolean;
+	safety?: PersistedSafetyState;
 	accounts: Record<
 		string,
 		{
 			totalRequests: number;
+			dailyRequestCount?: number;
+			dailyRequestDay?: string;
 			cooldownUntil?: number; // legacy fallback
 			cooldownsByModel?: Record<string, number>;
 			quotaExhaustedAt: number;

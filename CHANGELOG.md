@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.9.1] - 2026-04-29
+
+### Fixed
+- **429 Account-Safety Backoff**: All provider-side `429` responses now stop the current request instead of immediately retrying another account. This prevents cascade-burning the full pool when Google rate-limits a shared project/request bucket. `RESOURCE_EXHAUSTED` gets a 30-minute cooldown; other 429s use parsed `Retry-After`/retry-delay.
+- **Stream Idle Crash Safety**: Stream idle timeout now closes cleanly without emitting an unhandled stream error that could crash-loop systemd.
+
+### Added
+- **Project Circuit Breaker**: If multiple accounts sharing a `projectId` hit provider `429` for the same quota model inside a rolling window, routing pauses that `projectId`/model instead of burning sibling accounts.
+- **Daily Safety Budgets**: Per-account and per-`projectId` daily upstream attempt counters now trigger slow-mode jitter and hard stops until the next UTC day.
+- **Project Concurrency Guard**: Added `maxConcurrentRequestsPerProjectModel` to prevent simultaneous calls through multiple accounts backed by the same provider project bucket.
+- **Large Context Warning**: Requests above 1 MiB now log a warning because huge contexts increase rate-limit and flag pressure.
+
 ## [1.9.0] - 2026-04-29
 
 ### Added

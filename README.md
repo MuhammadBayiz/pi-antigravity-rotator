@@ -222,6 +222,16 @@ pi-antigravity-rotator start --config-dir /path/to/config
   "rotateOnQuotaDrop": 20,
   "quotaPollIntervalMs": 300000,
   "maxConcurrentRequestsPerAccount": 1,
+  "maxConcurrentRequestsPerProjectModel": 1,
+  "projectCircuitBreaker429Threshold": 3,
+  "projectCircuitBreakerWindowMs": 600000,
+  "projectCircuitBreakerCooldownMs": 3600000,
+  "dailyAccountSlowRequests": 250,
+  "dailyAccountStopRequests": 350,
+  "dailyProjectSlowRequests": 900,
+  "dailyProjectStopRequests": 1200,
+  "slowModeJitterMinMs": 8000,
+  "slowModeJitterMaxMs": 25000,
   "protectivePauseMs": 21600000,
   "useRequestCountRotationWhenQuotaUnknownOnly": true,
   "accounts": [
@@ -244,6 +254,16 @@ pi-antigravity-rotator start --config-dir /path/to/config
 | `rotateOnQuotaDrop` | `20` | Rotate when a model's quota drops this many %. Set to `0` to disable |
 | `quotaPollIntervalMs` | `300000` | Quota poll interval in ms (5 minutes) |
 | `maxConcurrentRequestsPerAccount` | `1` | Max simultaneous requests allowed per account |
+| `maxConcurrentRequestsPerProjectModel` | `1` | Max simultaneous requests allowed across accounts sharing the same `projectId` for the same quota model |
+| `projectCircuitBreaker429Threshold` | `3` | Unique accounts from the same `projectId` that must hit provider `429` before pausing that project/model |
+| `projectCircuitBreakerWindowMs` | `600000` | Rolling window for the project/model `429` circuit breaker |
+| `projectCircuitBreakerCooldownMs` | `3600000` | Minimum project/model pause after the circuit breaker trips |
+| `dailyAccountSlowRequests` | `250` | Daily upstream attempts per account before slow-mode jitter starts |
+| `dailyAccountStopRequests` | `350` | Daily upstream attempts per account before routing stops for that account until the next UTC day |
+| `dailyProjectSlowRequests` | `900` | Daily upstream attempts per `projectId` before slow-mode jitter starts |
+| `dailyProjectStopRequests` | `1200` | Daily upstream attempts per `projectId` before routing stops for that project until the next UTC day |
+| `slowModeJitterMinMs` | `8000` | Minimum slow-mode delay before upstream request |
+| `slowModeJitterMaxMs` | `25000` | Maximum slow-mode delay before upstream request |
 | `protectivePauseMs` | `21600000` | Global routing pause after a serious provider enforcement signal |
 | `useRequestCountRotationWhenQuotaUnknownOnly` | `true` | Use request-count rotation only until quota telemetry exists for the request's model. Set to `false` to keep rotating by request count even with known quotas |
 

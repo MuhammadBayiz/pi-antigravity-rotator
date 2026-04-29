@@ -38,6 +38,16 @@ function loadConfig(): Config {
 		config.rotateOnQuotaDrop = config.rotateOnQuotaDrop ?? 20;
 		config.quotaPollIntervalMs = config.quotaPollIntervalMs || 300_000;
 		config.maxConcurrentRequestsPerAccount = config.maxConcurrentRequestsPerAccount ?? 1;
+		config.maxConcurrentRequestsPerProjectModel = config.maxConcurrentRequestsPerProjectModel ?? 1;
+		config.projectCircuitBreaker429Threshold = config.projectCircuitBreaker429Threshold ?? 3;
+		config.projectCircuitBreakerWindowMs = config.projectCircuitBreakerWindowMs ?? 10 * 60 * 1000;
+		config.projectCircuitBreakerCooldownMs = config.projectCircuitBreakerCooldownMs ?? 60 * 60 * 1000;
+		config.dailyAccountSlowRequests = config.dailyAccountSlowRequests ?? 250;
+		config.dailyAccountStopRequests = config.dailyAccountStopRequests ?? 350;
+		config.dailyProjectSlowRequests = config.dailyProjectSlowRequests ?? 900;
+		config.dailyProjectStopRequests = config.dailyProjectStopRequests ?? 1200;
+		config.slowModeJitterMinMs = config.slowModeJitterMinMs ?? 8_000;
+		config.slowModeJitterMaxMs = config.slowModeJitterMaxMs ?? 25_000;
 		config.protectivePauseMs = config.protectivePauseMs ?? 6 * 60 * 60 * 1000;
 		config.useRequestCountRotationWhenQuotaUnknownOnly =
 			config.useRequestCountRotationWhenQuotaUnknownOnly ?? true;
@@ -97,7 +107,8 @@ export function main(): void {
 	console.log(`Loaded ${config.accounts.length} accounts`);
 	console.log(`Rotation: ${config.requestsPerRotation} requests / ${config.rotateOnQuotaDrop}% quota drop`);
 	console.log(`Quota poll: every ${Math.round((config.quotaPollIntervalMs || 300000) / 1000)}s`);
-	console.log(`Concurrency cap: ${config.maxConcurrentRequestsPerAccount} request/account`);
+	console.log(`Concurrency cap: ${config.maxConcurrentRequestsPerAccount} request/account, ${config.maxConcurrentRequestsPerProjectModel} request/project+model`);
+	console.log(`Safety breaker: ${config.projectCircuitBreaker429Threshold} provider 429s / ${Math.round((config.projectCircuitBreakerWindowMs || 0) / 60000)}m pauses project+model for ${Math.round((config.projectCircuitBreakerCooldownMs || 0) / 60000)}m`);
 	console.log(`Protective pause: ${Math.round((config.protectivePauseMs || 0) / 3600000)}h after serious flag`);
 	console.log();
 

@@ -63,6 +63,16 @@ export function validateConfig(value: unknown): ValidationResult<Config> {
 	if (value.quotaPollIntervalMs !== undefined && !isPositiveNumber(value.quotaPollIntervalMs)) errors.push("config.quotaPollIntervalMs must be a positive number");
 	if (value.proSlots !== undefined && !isPositiveNumber(value.proSlots)) errors.push("config.proSlots must be a positive number");
 	if (value.maxConcurrentRequestsPerAccount !== undefined && !isPositiveNumber(value.maxConcurrentRequestsPerAccount)) errors.push("config.maxConcurrentRequestsPerAccount must be a positive number");
+	if (value.maxConcurrentRequestsPerProjectModel !== undefined && !isPositiveNumber(value.maxConcurrentRequestsPerProjectModel)) errors.push("config.maxConcurrentRequestsPerProjectModel must be a positive number");
+	if (value.projectCircuitBreaker429Threshold !== undefined && !isPositiveNumber(value.projectCircuitBreaker429Threshold)) errors.push("config.projectCircuitBreaker429Threshold must be a positive number");
+	if (value.projectCircuitBreakerWindowMs !== undefined && !isPositiveNumber(value.projectCircuitBreakerWindowMs)) errors.push("config.projectCircuitBreakerWindowMs must be a positive number");
+	if (value.projectCircuitBreakerCooldownMs !== undefined && !isPositiveNumber(value.projectCircuitBreakerCooldownMs)) errors.push("config.projectCircuitBreakerCooldownMs must be a positive number");
+	if (value.dailyAccountSlowRequests !== undefined && !isPositiveNumber(value.dailyAccountSlowRequests)) errors.push("config.dailyAccountSlowRequests must be a positive number");
+	if (value.dailyAccountStopRequests !== undefined && !isPositiveNumber(value.dailyAccountStopRequests)) errors.push("config.dailyAccountStopRequests must be a positive number");
+	if (value.dailyProjectSlowRequests !== undefined && !isPositiveNumber(value.dailyProjectSlowRequests)) errors.push("config.dailyProjectSlowRequests must be a positive number");
+	if (value.dailyProjectStopRequests !== undefined && !isPositiveNumber(value.dailyProjectStopRequests)) errors.push("config.dailyProjectStopRequests must be a positive number");
+	if (value.slowModeJitterMinMs !== undefined && !isNonNegativeNumber(value.slowModeJitterMinMs)) errors.push("config.slowModeJitterMinMs must be a non-negative number");
+	if (value.slowModeJitterMaxMs !== undefined && !isNonNegativeNumber(value.slowModeJitterMaxMs)) errors.push("config.slowModeJitterMaxMs must be a non-negative number");
 	if (value.protectivePauseMs !== undefined && !isNonNegativeNumber(value.protectivePauseMs)) errors.push("config.protectivePauseMs must be a non-negative number");
 	if (value.useRequestCountRotationWhenQuotaUnknownOnly !== undefined && typeof value.useRequestCountRotationWhenQuotaUnknownOnly !== "boolean") {
 		errors.push("config.useRequestCountRotationWhenQuotaUnknownOnly must be a boolean");
