@@ -182,9 +182,88 @@ function calculateSavings(tokensByModel) {
 }
 
 // ── Stats ────────────────────────────────────────────────────────────
-function computeStats() {
+// ── Stats filtering ───────────────────────────────────────────────────
+function parseQueryString(url) {
+	const idx = url.indexOf("?");
+	if (idx === -1) return {};
+	const params = {};
+	for (const part of url.slice(idx + 1).split("&")) {
+		const [k, v] = part.split("=").map(decodeURIComponent);
+		if (k) params[k] = v ?? "";
+	}
+	return params;
+}
+
+// Collect all raw events + flag events from JSONL files
+function loadAllEvents() {
 	const allFiles = readdirSync(DATA_DIR).filter((f) => f.endsWith(".jsonl") && !f.endsWith("-flags.jsonl")).sort();
 	const flagFiles = readdirSync(DATA_DIR).filter((f) => f.endsWith("-flags.jsonl")).sort();
+	const events = [];
+	const flagEvents = [];
+	for (const file of allFiles) {
+		const lines = readFileSync(join(DATA_DIR, file), "utf-8").split("\n").filter(Boolean);
+		for (const line of lines) {
+			try { events.push({ file, ev: JSON.parse(line) }); } catch { /* skip */ }
+		}
+	}
+	for (const file of flagFiles) {
+		const lines = readFileSync(join(DATA_DIR, file), "utf-8").split("\n").filter(Boolean);
+		for (const line of lines) {
+			try { flagEvents.push({ file, fl: JSON.parse(line) }); } catch { /* skip */ }
+		}
+	}
+	return { events, flagEvents, allFiles, flagFiles };
+}
+
+// Extract filter options from all events (unfiltered, for populating dropdowns)
+function buildFilterOptions(events, flagEvents) {
+	const installIds = new Set();
+	const versions = new Set();
+	const osList = new Set();
+	const models = new Set();
+	const dates = new Set();
+	for (const { ev, file } of events) {
+		if (ev.installId) installIds.add(ev.installId);
+		if (ev.version) versions.add(ev.version);
+		if (ev.os) osList.add(ev.os);
+		for (const m of ev.modelsUsed || []) models.add(m);
+		const date = file.replace(".jsonl", "");
+		if (date) dates.add(date);
+	}
+	return {
+		installIds: [...installIds].sort(),
+		versions: [...versions].sort(),
+		os: [...osList].sort(),
+		models: [...models].sort(),
+		dateRange: { from: [...dates].sort()[0] ?? null, to: [...dates].sort().at(-1) ?? null },
+	};
+}
+
+function computeStats(filters = {}) {
+	const { events: allEvents, flagEvents: allFlagEvents, allFiles } = loadAllEvents();
+
+	// Apply filters to main events
+	const events = allEvents.filter(({ ev, file }) => {
+		if (filters.installId && ev.installId !== filters.installId) return false;
+		if (filters.version && ev.version !== filters.version) return false;
+		if (filters.os && ev.os !== filters.os) return false;
+		if (filters.model && !(ev.modelsUsed || []).includes(filters.model)) return false;
+		const date = file.replace(".jsonl", "");
+		if (filters.from && date < filters.from) return false;
+		if (filters.to && date > filters.to) return false;
+		return true;
+	});
+
+	// Apply filters to flag events (by installId, date)
+	const flagEvents = allFlagEvents.filter(({ fl, file }) => {
+		if (filters.installId && fl.installId !== filters.installId) return false;
+		if (filters.model && fl.model !== filters.model) return false;
+		const date = file.replace("-flags.jsonl", "");
+		if (filters.from && date < filters.from) return false;
+		if (filters.to && date > filters.to) return false;
+		return true;
+	});
+
 	const uniqueInstalls = new Set();
 	let totalEvents = 0;
 	let totalBoots = 0;
@@ -199,81 +278,62 @@ function computeStats() {
 	let featuresCount = { dashboard: 0, proAdvisor: 0, freshWindowToggle: 0, hostedLogin: 0 };
 	const globalTokensByModel = {};
 
-	// Flag-specific aggregates
-	const flagsByStatus = {};      // { 401: N, 403: N }
-	const flagsByPattern = {};     // { "infring": N, "abus": N, ... }
-	const flagsByModel = {};       // { "claude-opus-4-6-thinking": N }
-	const flagsByTimerType = {};   // { "fresh": N, "5h": N, "7d": N }
+	for (const { ev } of events) {
+		totalEvents++;
+		uniqueInstalls.add(ev.installId);
+		if (ev.event === "boot") totalBoots++;
+		if (ev.event === "flag") totalFlags++;
+		versionCounts[ev.version] = (versionCounts[ev.version] || 0) + 1;
+		osCounts[ev.os] = (osCounts[ev.os] || 0) + 1;
+		archCounts[ev.arch] = (archCounts[ev.arch] || 0) + 1;
+		healthCounts[ev.routingHealthState] = (healthCounts[ev.routingHealthState] || 0) + 1;
+		totalAccounts += ev.accountCount || 0;
+		totalRequests += ev.totalRequests || 0;
+		if (ev.tokensByModel && typeof ev.tokensByModel === "object") {
+			for (const [model, data] of Object.entries(ev.tokensByModel)) {
+				if (!globalTokensByModel[model]) globalTokensByModel[model] = { input: 0, output: 0, requests: 0 };
+				globalTokensByModel[model].input += data.input || 0;
+				globalTokensByModel[model].output += data.output || 0;
+				globalTokensByModel[model].requests += data.requests || 0;
+			}
+		}
+		for (const m of ev.modelsUsed || []) modelCounts[m] = (modelCounts[m] || 0) + 1;
+		if (ev.featuresUsed) {
+			for (const [k, v] of Object.entries(ev.featuresUsed)) {
+				if (v && k in featuresCount) featuresCount[k]++;
+			}
+		}
+	}
+
+	// Flag aggregates
+	const flagsByStatus = {};
+	const flagsByPattern = {};
+	const flagsByModel = {};
+	const flagsByTimerType = {};
 	let flagsOnProAccounts = 0;
 	let flagsOnFreeAccounts = 0;
-	let avgRequestsBeforeFlag = 0;
 	let flagRequestsTotal = 0;
 	let flagCount = 0;
 
-	for (const file of allFiles) {
-		const lines = readFileSync(join(DATA_DIR, file), "utf-8").split("\n").filter(Boolean);
-		for (const line of lines) {
-			try {
-				const ev = JSON.parse(line);
-				totalEvents++;
-				uniqueInstalls.add(ev.installId);
-				if (ev.event === "boot") totalBoots++;
-				if (ev.event === "flag") totalFlags++;
-
-				versionCounts[ev.version] = (versionCounts[ev.version] || 0) + 1;
-				osCounts[ev.os] = (osCounts[ev.os] || 0) + 1;
-				archCounts[ev.arch] = (archCounts[ev.arch] || 0) + 1;
-				healthCounts[ev.routingHealthState] = (healthCounts[ev.routingHealthState] || 0) + 1;
-
-				totalAccounts += ev.accountCount || 0;
-				totalRequests += ev.totalRequests || 0;
-
-				// Aggregate per-model tokens
-				if (ev.tokensByModel && typeof ev.tokensByModel === "object") {
-					for (const [model, data] of Object.entries(ev.tokensByModel)) {
-						if (!globalTokensByModel[model]) globalTokensByModel[model] = { input: 0, output: 0, requests: 0 };
-						globalTokensByModel[model].input += data.input || 0;
-						globalTokensByModel[model].output += data.output || 0;
-						globalTokensByModel[model].requests += data.requests || 0;
-					}
-				}
-
-				for (const m of ev.modelsUsed || []) {
-					modelCounts[m] = (modelCounts[m] || 0) + 1;
-				}
-
-				if (ev.featuresUsed) {
-					for (const [k, v] of Object.entries(ev.featuresUsed)) {
-						if (v && k in featuresCount) featuresCount[k]++;
-					}
-				}
-			} catch { /* skip bad lines */ }
-		}
+	for (const { fl } of flagEvents) {
+		flagCount++;
+		flagsByStatus[fl.flagHttpStatus] = (flagsByStatus[fl.flagHttpStatus] || 0) + 1;
+		for (const p of fl.flagPatternsMatched || []) flagsByPattern[p] = (flagsByPattern[p] || 0) + 1;
+		if (fl.model) flagsByModel[fl.model] = (flagsByModel[fl.model] || 0) + 1;
+		if (fl.timerType) flagsByTimerType[fl.timerType] = (flagsByTimerType[fl.timerType] || 0) + 1;
+		if (fl.wasProAccount) flagsOnProAccounts++;
+		else flagsOnFreeAccounts++;
+		flagRequestsTotal += fl.accountTotalRequests || 0;
 	}
 
-	// Process dedicated flag files
-	for (const file of flagFiles) {
-		const lines = readFileSync(join(DATA_DIR, file), "utf-8").split("\n").filter(Boolean);
-		for (const line of lines) {
-			try {
-				const fl = JSON.parse(line);
-				flagCount++;
-				flagsByStatus[fl.flagHttpStatus] = (flagsByStatus[fl.flagHttpStatus] || 0) + 1;
-				for (const p of fl.flagPatternsMatched || []) {
-					flagsByPattern[p] = (flagsByPattern[p] || 0) + 1;
-				}
-				if (fl.model) flagsByModel[fl.model] = (flagsByModel[fl.model] || 0) + 1;
-				if (fl.timerType) flagsByTimerType[fl.timerType] = (flagsByTimerType[fl.timerType] || 0) + 1;
-				if (fl.wasProAccount) flagsOnProAccounts++;
-				else flagsOnFreeAccounts++;
-				flagRequestsTotal += fl.accountTotalRequests || 0;
-			} catch { /* skip bad lines */ }
-		}
-	}
+	const avgRequestsBeforeFlag = flagCount > 0 ? Math.round(flagRequestsTotal / flagCount) : 0;
 
-	avgRequestsBeforeFlag = flagCount > 0 ? Math.round(flagRequestsTotal / flagCount) : 0;
+	// Build filter options from ALL events (unfiltered) for dropdown population
+	const filterOptions = buildFilterOptions(allEvents, allFlagEvents);
 
 	return {
+		filters: { ...filters },
+		filterOptions,
 		period: {
 			from: allFiles[0]?.replace(".jsonl", "") ?? null,
 			to: allFiles[allFiles.length - 1]?.replace(".jsonl", "") ?? null,
@@ -342,40 +402,51 @@ function buildDashboardHtml() {
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f1117;color:#e2e8f0;min-height:100vh}
-.header{background:#1a1f2e;border-bottom:1px solid #2d3748;padding:16px 24px;display:flex;align-items:center;gap:12px}
-.header h1{font-size:18px;font-weight:700;color:#fff}
-.header .ts{font-size:12px;color:#718096;background:#2d3748;padding:2px 8px;border-radius:12px;margin-left:auto}
-.token-bar{background:#1a1f2e;border-bottom:1px solid #2d3748;padding:12px 24px;display:flex;gap:8px;align-items:center}
-.token-bar input{flex:1;background:#0f1117;border:1px solid #2d3748;border-radius:6px;padding:8px 12px;color:#e2e8f0;font-size:13px;font-family:monospace}
-.token-bar input:focus{outline:none;border-color:#4299e1}
-.token-bar button{background:#4299e1;color:#fff;border:none;border-radius:6px;padding:8px 16px;cursor:pointer;font-size:13px;font-weight:600}
-.main{padding:24px;max-width:1400px;margin:0 auto}
-.kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:20px}
-.kpi{background:#1a1f2e;border:1px solid #2d3748;border-radius:10px;padding:16px}
-.kpi .label{font-size:11px;color:#718096;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}
-.kpi .value{font-size:26px;font-weight:700;color:#fff}
-.kpi .sub{font-size:11px;color:#718096;margin-top:3px}
+.header{background:#1a1f2e;border-bottom:1px solid #2d3748;padding:14px 24px;display:flex;align-items:center;gap:12px}
+.header h1{font-size:17px;font-weight:700;color:#fff}
+.header .ts{font-size:11px;color:#718096;background:#2d3748;padding:2px 8px;border-radius:10px;margin-left:auto}
+.token-bar{background:#1a1f2e;border-bottom:1px solid #2d3748;padding:10px 24px;display:flex;gap:8px;align-items:center}
+.token-bar input[type=password]{flex:1;background:#0f1117;border:1px solid #2d3748;border-radius:6px;padding:7px 12px;color:#e2e8f0;font-size:13px;font-family:monospace}
+.token-bar input[type=password]:focus{outline:none;border-color:#4299e1}
+.token-bar button{background:#4299e1;color:#fff;border:none;border-radius:6px;padding:7px 16px;cursor:pointer;font-size:13px;font-weight:600;white-space:nowrap}
+.token-bar button:hover{background:#3182ce}
+.filter-bar{background:#141820;border-bottom:1px solid #2d3748;padding:10px 24px;display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end}
+.filter-group{display:flex;flex-direction:column;gap:3px;min-width:140px}
+.filter-group label{font-size:10px;color:#718096;text-transform:uppercase;letter-spacing:.06em}
+select,input[type=date]{background:#1a1f2e;border:1px solid #2d3748;border-radius:6px;padding:6px 10px;color:#e2e8f0;font-size:12px;cursor:pointer}
+select:focus,input[type=date]:focus{outline:none;border-color:#4299e1}
+.filter-actions{display:flex;gap:6px;margin-top:14px}
+.btn-apply{background:#4299e1;color:#fff;border:none;border-radius:6px;padding:6px 14px;cursor:pointer;font-size:12px;font-weight:600}
+.btn-clear{background:#2d3748;color:#a0aec0;border:none;border-radius:6px;padding:6px 14px;cursor:pointer;font-size:12px}
+.filter-active{background:#1c4532;border:1px solid #276749;border-radius:6px;padding:4px 10px;font-size:11px;color:#68d391;display:none;align-items:center;gap:6px}
+.filter-active.show{display:flex}
+.main{padding:20px 24px;max-width:1400px;margin:0 auto}
+.kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:10px;margin-bottom:18px}
+.kpi{background:#1a1f2e;border:1px solid #2d3748;border-radius:10px;padding:14px}
+.kpi .label{font-size:10px;color:#718096;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px}
+.kpi .value{font-size:24px;font-weight:700;color:#fff}
+.kpi .sub{font-size:10px;color:#718096;margin-top:3px}
 .kpi.green .value{color:#68d391}.kpi.blue .value{color:#63b3ed}
 .kpi.yellow .value{color:#f6e05e}.kpi.red .value{color:#fc8181}
-.section{background:#1a1f2e;border:1px solid #2d3748;border-radius:10px;padding:20px;margin-bottom:16px}
-.section h2{font-size:12px;font-weight:700;color:#718096;text-transform:uppercase;letter-spacing:.08em;margin-bottom:16px}
-.charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-bottom:16px}
-.chart-box{background:#1a1f2e;border:1px solid #2d3748;border-radius:10px;padding:20px}
-.chart-box h2{font-size:12px;font-weight:700;color:#718096;text-transform:uppercase;letter-spacing:.08em;margin-bottom:14px}
-.chart-box canvas{max-height:200px}
-.flag-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:16px}
-.flag-kpi{background:#2d1f1f;border:1px solid #742a2a;border-radius:8px;padding:14px}
-.flag-kpi .label{font-size:11px;color:#fc8181;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}
-.flag-kpi .value{font-size:22px;font-weight:700;color:#feb2b2}
-table{width:100%;border-collapse:collapse;font-size:13px}
-th{text-align:left;padding:8px 12px;color:#718096;border-bottom:1px solid #2d3748;font-weight:500;white-space:nowrap}
-td{padding:8px 12px;border-bottom:1px solid #1f2535;color:#e2e8f0}
+.section{background:#1a1f2e;border:1px solid #2d3748;border-radius:10px;padding:18px;margin-bottom:14px}
+.section h2{font-size:11px;font-weight:700;color:#718096;text-transform:uppercase;letter-spacing:.08em;margin-bottom:14px}
+.charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin-bottom:14px}
+.chart-box{background:#1a1f2e;border:1px solid #2d3748;border-radius:10px;padding:18px}
+.chart-box h2{font-size:11px;font-weight:700;color:#718096;text-transform:uppercase;letter-spacing:.08em;margin-bottom:12px}
+.chart-box canvas{max-height:190px}
+.flag-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-bottom:14px}
+.flag-kpi{background:#2d1f1f;border:1px solid #742a2a;border-radius:8px;padding:12px}
+.flag-kpi .label{font-size:10px;color:#fc8181;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px}
+.flag-kpi .value{font-size:20px;font-weight:700;color:#feb2b2}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;padding:7px 12px;color:#718096;border-bottom:1px solid #2d3748;font-weight:500;white-space:nowrap}
+td{padding:7px 12px;border-bottom:1px solid #1f2535;color:#e2e8f0}
 tr:last-child td{border-bottom:none}
 .mono{font-family:monospace;color:#68d391}
-.savings-big{font-size:40px;font-weight:800;color:#68d391;margin-bottom:4px}
-.savings-sub{font-size:13px;color:#718096;margin-bottom:16px}
-.error{background:#2d1515;border:1px solid #742a2a;border-radius:8px;padding:14px;color:#fc8181;margin-bottom:16px}
-.empty{color:#4a5568;font-size:13px;padding:24px;text-align:center}
+.savings-big{font-size:36px;font-weight:800;color:#68d391;margin-bottom:3px}
+.savings-sub{font-size:12px;color:#718096;margin-bottom:14px}
+.error{background:#2d1515;border:1px solid #742a2a;border-radius:8px;padding:12px;color:#fc8181;margin-bottom:14px}
+.empty{color:#4a5568;font-size:12px;padding:20px;text-align:center}
 </style>
 </head>
 <body>
@@ -387,19 +458,51 @@ tr:last-child td{border-bottom:none}
   <input type="password" id="tok" placeholder="Paste STATS_TOKEN here…" />
   <button onclick="load()">Load Stats</button>
 </div>
+
+<div class="filter-bar" id="filterBar" style="display:none">
+  <div class="filter-group">
+    <label>Install ID</label>
+    <select id="fInstall"><option value="">All installs</option></select>
+  </div>
+  <div class="filter-group">
+    <label>Version</label>
+    <select id="fVersion"><option value="">All versions</option></select>
+  </div>
+  <div class="filter-group">
+    <label>OS</label>
+    <select id="fOS"><option value="">All OS</option></select>
+  </div>
+  <div class="filter-group">
+    <label>Model</label>
+    <select id="fModel"><option value="">All models</option></select>
+  </div>
+  <div class="filter-group">
+    <label>From</label>
+    <input type="date" id="fFrom" />
+  </div>
+  <div class="filter-group">
+    <label>To</label>
+    <input type="date" id="fTo" />
+  </div>
+  <div class="filter-actions">
+    <button class="btn-apply" onclick="applyFilters()">Apply</button>
+    <button class="btn-clear" onclick="clearFilters()">Clear</button>
+  </div>
+  <div class="filter-active" id="filterActive">
+    🔍 Filtered view
+  </div>
+</div>
+
 <div class="main">
   <div class="error" id="err" style="display:none"></div>
   <div id="app" style="display:none">
-
     <div class="kpi-grid" id="kpis"></div>
-
     <div class="section">
       <h2>💰 Estimated Savings (USD vs paid API)</h2>
       <div class="savings-big" id="savTotal">$0.00</div>
-      <div class="savings-sub">Total saved across all installs</div>
+      <div class="savings-sub">Total saved across filtered installs</div>
       <div id="savTable"></div>
     </div>
-
     <div class="section">
       <h2>🚨 Flag Analysis</h2>
       <div class="flag-kpis" id="flagKpis"></div>
@@ -409,12 +512,10 @@ tr:last-child td{border-bottom:none}
         <div class="chart-box"><h2>By Timer Type</h2><canvas id="cTimerType"></canvas></div>
       </div>
     </div>
-
     <div class="section">
       <h2>📊 Token Usage by Model</h2>
       <div id="tokTable"></div>
     </div>
-
     <div class="charts">
       <div class="chart-box"><h2>Versions</h2><canvas id="cVersions"></canvas></div>
       <div class="chart-box"><h2>OS</h2><canvas id="cOS"></canvas></div>
@@ -422,47 +523,117 @@ tr:last-child td{border-bottom:none}
       <div class="chart-box"><h2>Routing Health</h2><canvas id="cHealth"></canvas></div>
       <div class="chart-box"><h2>Features Used</h2><canvas id="cFeatures"></canvas></div>
     </div>
-
   </div>
 </div>
+
 <script>
 const C=['#63b3ed','#68d391','#f6e05e','#b794f4','#fc8181','#fbd38d','#76e4f7','#a3bffa'];
-const R=['#fc8181','#f6ad55','#faf089','#fc8181','#feb2b2'];
+const R=['#fc8181','#f6ad55','#faf089','#b794f4','#feb2b2'];
 const charts={};
+let _token='';
+let _filterOptions={};
+
 function $(i){return document.getElementById(i)}
 function fmt(n){return n==null?'—':Number(n).toLocaleString()}
 function usd(n){return '$'+Number(n||0).toFixed(2)}
+
 function mkChart(id,type,labels,datasets){
   if(charts[id])charts[id].destroy();
   const ctx=$(id)?.getContext('2d');if(!ctx)return;
-  charts[id]=new Chart(ctx,{type,
-    data:{labels,datasets},
-    options:{responsive:true,maintainAspectRatio:true,
-      plugins:{legend:{labels:{color:'#a0aec0',font:{size:11}}}},
-      scales:type==='bar'?{x:{ticks:{color:'#718096'},grid:{color:'#2d3748'}},y:{ticks:{color:'#718096'},grid:{color:'#2d3748'}}}:undefined
-    }
-  });
+  charts[id]=new Chart(ctx,{type,data:{labels,datasets},options:{
+    responsive:true,maintainAspectRatio:true,
+    plugins:{legend:{labels:{color:'#a0aec0',font:{size:11}}}},
+    scales:type==='bar'?{x:{ticks:{color:'#718096'},grid:{color:'#2d3748'}},y:{ticks:{color:'#718096'},grid:{color:'#2d3748'}}}:undefined
+  }});
 }
+
 async function load(){
   const t=$('tok').value.trim();
   if(!t)return;
+  _token=t;
   localStorage.setItem('st',t);
-  await go(t);
+  await go({});
 }
-async function go(t){
+
+function buildParams(f){
+  const p=new URLSearchParams();
+  if(f.installId)p.set('installId',f.installId);
+  if(f.version)p.set('version',f.version);
+  if(f.os)p.set('os',f.os);
+  if(f.model)p.set('model',f.model);
+  if(f.from)p.set('from',f.from);
+  if(f.to)p.set('to',f.to);
+  return p.toString();
+}
+
+async function go(filters){
+  const qs=buildParams(filters);
+  const url='/v1/stats'+(qs?'?'+qs:'');
   try{
-    const r=await fetch('/v1/stats',{headers:{'Authorization':'Bearer '+t}});
-    if(r.status===401){$('err').textContent='⚠ Invalid token';$('err').style.display='';return}
-    if(!r.ok){$('err').textContent='⚠ Server error '+r.status;$('err').style.display='';return}
+    const r=await fetch(url,{headers:{'Authorization':'Bearer '+_token}});
+    if(r.status===401){showErr('Invalid token');return}
+    if(!r.ok){showErr('Server error '+r.status);return}
     const d=await r.json();
     $('err').style.display='none';
     $('app').style.display='block';
+    $('filterBar').style.display='flex';
     $('ts').textContent='Updated '+new Date().toLocaleTimeString();
-    render(d);
-  }catch(e){$('err').textContent='⚠ '+e.message;$('err').style.display='';}
+    render(d,filters);
+  }catch(e){showErr(e.message);}
 }
-function render(d){
-  // KPIs
+
+function showErr(msg){$('err').textContent='⚠ '+msg;$('err').style.display='';}
+
+function applyFilters(){
+  const f={};
+  const i=$('fInstall').value;if(i)f.installId=i;
+  const v=$('fVersion').value;if(v)f.version=v;
+  const o=$('fOS').value;if(o)f.os=o;
+  const m=$('fModel').value;if(m)f.model=m;
+  const fr=$('fFrom').value;if(fr)f.from=fr;
+  const to=$('fTo').value;if(to)f.to=to;
+  const hasFilters=Object.keys(f).length>0;
+  const fa=$('filterActive');
+  if(hasFilters){fa.classList.add('show');fa.textContent='🔍 Filtered: '+Object.entries(f).map(([k,v])=>k+'='+v).join(', ');}
+  else{fa.classList.remove('show');}
+  go(f);
+}
+
+function clearFilters(){
+  $('fInstall').value='';
+  $('fVersion').value='';
+  $('fOS').value='';
+  $('fModel').value='';
+  $('fFrom').value='';
+  $('fTo').value='';
+  $('filterActive').classList.remove('show');
+  go({});
+}
+
+function populateDropdowns(opts){
+  _filterOptions=opts;
+  const cur={install:$('fInstall').value,ver:$('fVersion').value,os:$('fOS').value,model:$('fModel').value};
+  fillSelect('fInstall',opts.installIds,'All installs',cur.install);
+  fillSelect('fVersion',opts.versions,'All versions',cur.ver);
+  fillSelect('fOS',opts.os,'All OS',cur.os);
+  fillSelect('fModel',opts.models,'All models',cur.model);
+  if(opts.dateRange?.from&&!$('fFrom').value)$('fFrom').value=opts.dateRange.from;
+}
+
+function fillSelect(id,items,placeholder,selected){
+  const el=$(id);
+  el.innerHTML='<option value="">'+placeholder+'</option>';
+  for(const it of items){
+    const o=document.createElement('option');
+    o.value=it;o.textContent=it;
+    if(it===selected)o.selected=true;
+    el.appendChild(o);
+  }
+}
+
+function render(d, filters={}){
+  if(d.filterOptions)populateDropdowns(d.filterOptions);
+
   $('kpis').innerHTML=[
     {l:'Unique Installs',v:fmt(d.uniqueInstalls),c:'green'},
     {l:'Total Events',v:fmt(d.totalEvents),c:'blue'},
@@ -474,13 +645,11 @@ function render(d){
     {l:'Period',v:d.period?.from||'—',sub:d.period?.to?'→ '+d.period.to:''},
   ].map(k=>'<div class="kpi '+k.c+'"><div class="label">'+k.l+'</div><div class="value">'+k.v+'</div>'+(k.sub?'<div class="sub">'+k.sub+'</div>':'')+'</div>').join('');
 
-  // Savings
   const sv=d.savings||{};
   $('savTotal').textContent=usd(sv.totalUsd);
-  const rows=Object.entries(sv.byModel||{}).map(([m,v])=>'<tr><td class="mono">'+m+'</td><td>'+usd(v.inputUsd)+'</td><td>'+usd(v.outputUsd)+'</td><td><strong>'+usd(v.totalUsd)+'</strong></td></tr>').join('');
-  $('savTable').innerHTML=rows?'<table><thead><tr><th>Model</th><th>Input</th><th>Output</th><th>Total</th></tr></thead><tbody>'+rows+'</tbody></table>':'<div class="empty">No data yet</div>';
+  const svRows=Object.entries(sv.byModel||{}).map(([m,v])=>'<tr><td class="mono">'+m+'</td><td>'+usd(v.inputUsd)+'</td><td>'+usd(v.outputUsd)+'</td><td><strong>'+usd(v.totalUsd)+'</strong></td></tr>').join('');
+  $('savTable').innerHTML=svRows?'<table><thead><tr><th>Model</th><th>Input</th><th>Output</th><th>Total</th></tr></thead><tbody>'+svRows+'</tbody></table>':'<div class="empty">No data yet</div>';
 
-  // Flag KPIs
   const fl=d.flags||{};
   $('flagKpis').innerHTML=[
     {l:'Total Flags',v:fmt(fl.totalFlags||0)},
@@ -492,24 +661,22 @@ function render(d){
   mkChart('cFlagModels','doughnut',Object.keys(fl.byModel||{}),[{data:Object.values(fl.byModel||{}),backgroundColor:C}]);
   mkChart('cTimerType','doughnut',Object.keys(fl.byTimerType||{}),[{data:Object.values(fl.byTimerType||{}),backgroundColor:['#63b3ed','#f6e05e','#68d391']}]);
 
-  // Token usage
   const tk=d.tokensByModel||{};
   $('tokTable').innerHTML=Object.keys(tk).length?'<table><thead><tr><th>Model</th><th>Input Tokens</th><th>Output Tokens</th><th>Requests</th></tr></thead><tbody>'+Object.entries(tk).map(([m,v])=>'<tr><td class="mono">'+m+'</td><td>'+fmt(v.input)+'</td><td>'+fmt(v.output)+'</td><td>'+fmt(v.requests)+'</td></tr>').join('')+'</tbody></table>':'<div class="empty">No token data yet</div>';
 
-  // Charts
   mkChart('cVersions','bar',Object.keys(d.versions||{}),[{label:'Events',data:Object.values(d.versions||{}),backgroundColor:'#63b3ed'}]);
   mkChart('cOS','doughnut',Object.keys(d.os||{}),[{data:Object.values(d.os||{}),backgroundColor:C}]);
   mkChart('cModels','doughnut',Object.keys(d.modelsUsed||{}),[{data:Object.values(d.modelsUsed||{}),backgroundColor:C}]);
   mkChart('cHealth','doughnut',Object.keys(d.routingHealth||{}),[{data:Object.values(d.routingHealth||{}),backgroundColor:['#68d391','#f6e05e','#fc8181','#718096']}]);
   mkChart('cFeatures','bar',Object.keys(d.featuresUsed||{}),[{label:'Times used',data:Object.values(d.featuresUsed||{}),backgroundColor:'#b794f4'}]);
 }
+
 const saved=localStorage.getItem('st');
-if(saved){$('tok').value=saved;go(saved);}
-setInterval(()=>{const t=localStorage.getItem('st');if(t)go(t);},60000);
+if(saved){_token=saved;$('tok').value=saved;go({});}
+setInterval(()=>{if(_token){const f={};const i=$('fInstall').value;if(i)f.installId=i;const v=$('fVersion').value;if(v)f.version=v;const o=$('fOS').value;if(o)f.os=o;const m=$('fModel').value;if(m)f.model=m;const fr=$('fFrom').value;if(fr)f.from=fr;const to=$('fTo').value;if(to)f.to=to;go(f);}},60000);
 </script>
 </body></html>`;
 }
-
 // ── HTTP Server ──────────────────────────────────────────────────────
 function readBody(req) {
 	return new Promise((resolve, reject) => {
@@ -557,7 +724,7 @@ const server = createServer(async (req, res) => {
 	}
 
 	// Stats (protected)
-	if (method === "GET" && url === "/v1/stats") {
+	if (method === "GET" && url.startsWith("/v1/stats")) {
 		if (!STATS_TOKEN) {
 			res.writeHead(403, { "Content-Type": "application/json" });
 			res.end(JSON.stringify({ error: "STATS_TOKEN not configured" }));
@@ -570,7 +737,15 @@ const server = createServer(async (req, res) => {
 			return;
 		}
 		try {
-			const stats = computeStats();
+			const q = parseQueryString(url);
+			const filters = {};
+			if (q.installId) filters.installId = q.installId;
+			if (q.version) filters.version = q.version;
+			if (q.os) filters.os = q.os;
+			if (q.model) filters.model = q.model;
+			if (q.from) filters.from = q.from;
+			if (q.to) filters.to = q.to;
+			const stats = computeStats(filters);
 			res.writeHead(200, { "Content-Type": "application/json" });
 			res.end(JSON.stringify(stats, null, 2));
 		} catch (err) {
