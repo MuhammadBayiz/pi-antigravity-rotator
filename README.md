@@ -65,31 +65,6 @@ The tool automatically:
 
 Re-running with the same email updates the existing entry.
 
-## Hosted Login Page
-
-This fork can also host a family-facing login page so people can connect their own account without copying a `localhost` URL by hand.
-
-Public routes:
-
-- `GET /login` -- landing page for account linking
-- `GET /auth/antigravity/start` -- starts the Google OAuth flow
-- `GET /auth/antigravity/callback` -- receives the OAuth callback and adds the account to the running rotator
-
-Required environment variables for hosted mode:
-
-```bash
-export ANTIGRAVITY_CLIENT_ID="your-oauth-client-id"
-export ANTIGRAVITY_CLIENT_SECRET="your-oauth-client-secret"
-export ANTIGRAVITY_REDIRECT_URI="https://your-domain.example.com/auth/antigravity/callback"
-```
-
-Notes:
-
-- The redirect URI must be registered on the OAuth client, or Google will reject the flow.
-- The hosted page does not modify `~/.pi/agent/*`; it only adds the account to the rotator config.
-- If those env vars are not set, `/login` still loads but explains that hosted OAuth is not configured yet.
-- Refresh token handling during normal runtime uses the same configured client ID and secret, so the hosted sign-in and later token refreshes stay aligned.
-
 ## Dashboard
 
 After starting the proxy, open `http://localhost:51200/dashboard` or `http://<your-server-ip>:51200/dashboard` from any machine on the same network (the proxy binds to `0.0.0.0`).
@@ -97,12 +72,13 @@ After starting the proxy, open `http://localhost:51200/dashboard` or `http://<yo
 The dashboard shows:
 
 - **Top Status & Controls** -- Real-time routing state, uptime, requests, and PII masking toggle.
+- **Pro Family Advisor & Dual-Window Tracking** -- Advanced logic that tracks and compares both Pro and Free quota windows simultaneously. The Advisor analyzes cumulative quota to suggest mathematical upgrades/downgrades.
 - **Token Usage & Savings** -- Interactive chart (`1h`, `2h`, `4h`, `8h`, `12h`, `1d`, `7d`, `1m`) showing token consumption by model, with estimated USD savings and `CSV`/`JSON` export options.
 - **Activity Heatmap** -- 60-day responsive GitHub-style contribution grid showing request intensity hour by hour.
 - **Latency (p50/p95)** -- Real-time median and 95th percentile tracking for Time-to-First-Byte (TTFB) and Total Duration per model.
 - **Quota Forecast** -- Predictive modeling showing when each model's quota will run out based on the current requests/hour burn rate.
 - **Searchable Request Log** -- Live feed of the last 200 requests with exact timestamps, models, masked accounts, status codes, and latency.
-- **Account Cards** -- Sorted by total quota. Shows status (`active`, `ready`, `cooldown`, `flagged`, `disabled`), served models, quota bars with timers, and precise error messages.
+- **Account Cards** -- Sorted by total quota. Shows status (`active`, `ready`, `cooldown`, `flagged`, `disabled`), dual-window trackers, quota bars with timers, and precise error messages.
 - **Operator Panels** -- "Attention Needed" summaries for quarantined accounts and a real-time event feed of rotator actions.
 
 ![Dashboard](dashboard.png)
