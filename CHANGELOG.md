@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.8.5] - 2026-04-29
+
+### Fixed
+- **4h / 8h / 12h views empty**: These views only pulled from `minutes` buckets. Minutes older than ~2h are rolled into `hours` and removed, leaving those views blank. Fixed by including `hours` as a data source alongside `minutes` for all sub-day views.
+
 ## [1.8.4] - 2026-04-29
 
 ### Changed

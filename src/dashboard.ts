@@ -1661,11 +1661,14 @@ function renderTokenChart(tokenUsage) {
   } else if (view === '2h') {
     buckets = padBuckets((tokenUsage.minutes || []), view);
   } else if (view === '4h') {
-    buckets = padBuckets(mergeBucketsBy((tokenUsage.minutes || []), function(p) { return getLocalKey(p, '2min'); }, 120), view);
+    var src4h = (tokenUsage.hours || []).concat(tokenUsage.minutes || []);
+    buckets = padBuckets(mergeBucketsBy(src4h, function(p) { return getLocalKey(p, '2min'); }, 120), view);
   } else if (view === '8h') {
-    buckets = padBuckets(mergeBucketsBy((tokenUsage.minutes || []), function(p) { return getLocalKey(p, '4min'); }, 120), view);
+    var src8h = (tokenUsage.hours || []).concat(tokenUsage.minutes || []);
+    buckets = padBuckets(mergeBucketsBy(src8h, function(p) { return getLocalKey(p, '4min'); }, 120), view);
   } else if (view === '12h') {
-    buckets = padBuckets(mergeBucketsBy((tokenUsage.minutes || []), function(p) { return getLocalKey(p, '5min'); }, 144), view);
+    var src12h = (tokenUsage.hours || []).concat(tokenUsage.minutes || []);
+    buckets = padBuckets(mergeBucketsBy(src12h, function(p) { return getLocalKey(p, '5min'); }, 144), view);
   } else if (view === '1d') {
     buckets = padBuckets(mergeBucketsBy((tokenUsage.hours || []).concat(tokenUsage.minutes || []), function(p) { return getLocalKey(p, 'hour'); }, 24), view);
   } else if (view === '7d') {
