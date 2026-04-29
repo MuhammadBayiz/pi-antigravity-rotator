@@ -21,6 +21,7 @@ import { logger } from "./logger.js";
 import { trackFeature, reportFlagEvent, FLAG_PATTERNS, type FlagPattern } from "./telemetry.js";
 import type { FlagEventData } from "./telemetry.js";
 import { startVersionChecker, performSelfUpdate } from "./version-check.js";
+import { startNotificationPoller } from "./notification-poller.js";
 
 const proxyLogger = logger.child("proxy");
 
@@ -632,6 +633,7 @@ function flattenHeaders(headers: IncomingMessage["headers"]): Record<string, str
 
 export function startProxy(rotator: AccountRotator, port: number): void {
 	startVersionChecker();
+	startNotificationPoller();
 	const sseClients = new Set<ServerResponse>();
 	let sseBroadcastTimer: ReturnType<typeof setTimeout> | null = null;
 	const SSE_THROTTLE_MS = 1000; // max 1 push/second

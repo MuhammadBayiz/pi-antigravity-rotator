@@ -225,6 +225,17 @@ export interface UpdateInfo {
 	checkedAt: number;
 }
 
+// Admin broadcast notification
+export interface AdminNotification {
+	id: string;
+	type: "info" | "warning" | "critical";
+	title: string;
+	message: string;
+	createdAt: string;
+	actionUrl?: string | null;
+	actionLabel?: string | null;
+}
+
 // Dashboard API response
 export interface StatusResponse {
 	proxyPort: number;
@@ -264,6 +275,7 @@ export interface StatusResponse {
 	tokenUsage: TokenUsageData;
 	latencyStats: Record<string, { ttfb: { p50: number; p95: number }; total: { p50: number; p95: number }; count: number }>;
 	updateInfo?: UpdateInfo;
+	notifications?: AdminNotification[];
 }
 
 export interface AccountStatus {

@@ -23,18 +23,82 @@
 import { createServer } from "node:http";
 import {
 	appendFileSync,
+	writeFileSync,
 	mkdirSync,
 	existsSync,
 	readdirSync,
 	readFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 
 const PORT = parseInt(process.env.PORT || "3800", 10);
 const DATA_DIR = process.env.DATA_DIR || "./data";
 const STATS_TOKEN = process.env.STATS_TOKEN || "";
 
 if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
+
+// ── Notifications Storage ────────────────────────────────────────────
+const NOTIFICATIONS_FILE = join(DATA_DIR, "notifications.json");
+
+function loadNotifications() {
+	try {
+		if (existsSync(NOTIFICATIONS_FILE)) {
+			return JSON.parse(readFileSync(NOTIFICATIONS_FILE, "utf-8"));
+		}
+	} catch { /* corrupted file, start fresh */ }
+	return [];
+}
+
+function saveNotifications(notifications) {
+	writeFileSync(NOTIFICATIONS_FILE, JSON.stringify(notifications, null, 2), "utf-8");
+}
+
+/**
+ * Simple semver comparison: returns true if a < b.
+ */
+function semverLt(a, b) {
+	const pa = a.split(".").map(Number);
+	const pb = b.split(".").map(Number);
+	for (let i = 0; i < 3; i++) {
+		const av = pa[i] ?? 0;
+		const bv = pb[i] ?? 0;
+		if (av < bv) return true;
+		if (av > bv) return false;
+	}
+	return false;
+}
+
+function semverLte(a, b) {
+	return a === b || semverLt(a, b);
+}
+
+/**
+ * Filter notifications for a client with a given version.
+ * Removes expired notifications and applies version targeting.
+ */
+function getActiveNotifications(clientVersion) {
+	const all = loadNotifications();
+	const now = new Date().toISOString();
+	return all.filter((n) => {
+		// Filter expired
+		if (n.expiresAt && n.expiresAt < now) return false;
+		// Version targeting
+		if (clientVersion) {
+			if (n.minVersion && semverLt(clientVersion, n.minVersion)) return false;
+			if (n.maxVersion && !semverLte(clientVersion, n.maxVersion)) return false;
+		}
+		return true;
+	}).map((n) => ({
+		id: n.id,
+		type: n.type || "info",
+		title: n.title,
+		message: n.message,
+		createdAt: n.createdAt,
+		actionUrl: n.actionUrl || null,
+		actionLabel: n.actionLabel || null,
+	}));
+}
 
 // ── Validation ───────────────────────────────────────────────────────
 const ALLOWED_EVENTS = new Set(["boot", "heartbeat", "shutdown", "flag"]);
@@ -690,6 +754,357 @@ setInterval(()=>{if(_token){const f={};const i=$('fInstall').value;if(i)f.instal
 </script>
 </body></html>`;
 }
+
+// ── Notifications Admin UI ───────────────────────────────────────────
+function buildNotificationsAdminHtml() {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Pi Rotator — Notification Manager</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f1117;color:#e2e8f0;min-height:100vh}
+.header{background:#1a1f2e;border-bottom:1px solid #2d3748;padding:14px 24px;display:flex;align-items:center;gap:12px}
+.header h1{font-size:17px;font-weight:700;color:#fff}
+.header .nav{margin-left:auto;display:flex;gap:10px;align-items:center}
+.header .nav a{color:#718096;font-size:13px;text-decoration:none;padding:4px 10px;border-radius:6px;transition:color .2s,background .2s}
+.header .nav a:hover{color:#e2e8f0;background:rgba(255,255,255,.06)}
+.token-bar{background:#1a1f2e;border-bottom:1px solid #2d3748;padding:10px 24px;display:flex;gap:8px;align-items:center}
+.token-bar input[type=password]{flex:1;background:#0f1117;border:1px solid #2d3748;border-radius:6px;padding:7px 12px;color:#e2e8f0;font-size:13px;font-family:monospace}
+.token-bar input[type=password]:focus{outline:none;border-color:#4299e1}
+.token-bar button{background:#4299e1;color:#fff;border:none;border-radius:6px;padding:7px 16px;cursor:pointer;font-size:13px;font-weight:600;white-space:nowrap}
+.token-bar button:hover{background:#3182ce}
+.main{padding:20px 24px;max-width:1100px;margin:0 auto}
+.section{background:#1a1f2e;border:1px solid #2d3748;border-radius:10px;padding:18px;margin-bottom:14px}
+.section h2{font-size:11px;font-weight:700;color:#718096;text-transform:uppercase;letter-spacing:.08em;margin-bottom:14px}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.form-group{display:flex;flex-direction:column;gap:4px}
+.form-group.full{grid-column:1/-1}
+.form-group label{font-size:11px;color:#718096;text-transform:uppercase;letter-spacing:.05em;font-weight:600}
+.form-group input,.form-group textarea,.form-group select{background:#0f1117;border:1px solid #2d3748;border-radius:6px;padding:8px 12px;color:#e2e8f0;font-size:13px;font-family:inherit}
+.form-group input:focus,.form-group textarea:focus,.form-group select:focus{outline:none;border-color:#4299e1}
+.form-group textarea{min-height:80px;resize:vertical}
+.form-actions{display:flex;gap:8px;margin-top:14px;grid-column:1/-1}
+.btn-primary{background:#4299e1;color:#fff;border:none;border-radius:6px;padding:8px 20px;cursor:pointer;font-size:13px;font-weight:600}
+.btn-primary:hover{background:#3182ce}
+.btn-primary:disabled{opacity:.5;cursor:not-allowed}
+.btn-secondary{background:#2d3748;color:#a0aec0;border:none;border-radius:6px;padding:8px 16px;cursor:pointer;font-size:13px}
+.btn-secondary:hover{background:#3d4a5e}
+.btn-danger{background:rgba(248,113,113,.15);color:#fc8181;border:1px solid rgba(248,113,113,.3);border-radius:6px;padding:4px 10px;cursor:pointer;font-size:11px;font-weight:600}
+.btn-danger:hover{background:rgba(248,113,113,.25)}
+.btn-edit{background:rgba(66,153,225,.12);color:#63b3ed;border:1px solid rgba(66,153,225,.3);border-radius:6px;padding:4px 10px;cursor:pointer;font-size:11px;font-weight:600}
+.btn-edit:hover{background:rgba(66,153,225,.22)}
+
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;padding:7px 12px;color:#718096;border-bottom:1px solid #2d3748;font-weight:500;white-space:nowrap}
+td{padding:7px 12px;border-bottom:1px solid #1f2535;color:#e2e8f0;vertical-align:top}
+tr:last-child td{border-bottom:none}
+.mono{font-family:monospace;color:#68d391;font-size:11px}
+.type-badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em}
+.type-info{background:rgba(66,153,225,.15);color:#63b3ed}
+.type-warning{background:rgba(251,191,36,.15);color:#fbbf24}
+.type-critical{background:rgba(248,113,113,.15);color:#fc8181}
+.status-active{color:#68d391;font-weight:600;font-size:11px}
+.status-expired{color:#718096;font-style:italic;font-size:11px}
+.empty{color:#4a5568;font-size:12px;padding:20px;text-align:center}
+.error{background:#2d1515;border:1px solid #742a2a;border-radius:8px;padding:12px;color:#fc8181;margin-bottom:14px}
+.success{background:#1c2d1c;border:1px solid #276749;border-radius:8px;padding:12px;color:#68d391;margin-bottom:14px}
+
+.preview{margin-top:14px;grid-column:1/-1}
+.preview-label{font-size:10px;color:#718096;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;font-weight:700}
+.preview-card{border-radius:10px;padding:14px 18px;display:flex;align-items:center;gap:12px}
+.preview-card.p-info{background:linear-gradient(135deg,rgba(66,153,225,.12),rgba(99,179,237,.08));border:1px solid rgba(66,153,225,.35)}
+.preview-card.p-warning{background:linear-gradient(135deg,rgba(251,191,36,.12),rgba(246,224,94,.08));border:1px solid rgba(251,191,36,.35)}
+.preview-card.p-critical{background:linear-gradient(135deg,rgba(248,113,113,.12),rgba(252,129,129,.08));border:1px solid rgba(248,113,113,.35)}
+.preview-icon{font-size:22px;flex-shrink:0}
+.preview-content{flex:1;min-width:0}
+.preview-title{font-weight:700;font-size:14px;margin-bottom:3px}
+.preview-msg{font-size:12px;color:#a0aec0;line-height:1.4}
+.preview-btn{display:inline-block;margin-top:6px;padding:4px 12px;border-radius:6px;font-size:11px;font-weight:600;text-decoration:none;border:1px solid rgba(255,255,255,.15);color:#e2e8f0;background:rgba(255,255,255,.06)}
+.p-info .preview-title{color:#63b3ed}
+.p-warning .preview-title{color:#fbbf24}
+.p-critical .preview-title{color:#fc8181}
+.version-hint{font-size:10px;color:#4a5568;margin-top:2px}
+@media(max-width:700px){.form-grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>\u{1f514} Notification Manager</h1>
+  <div class="nav">
+    <a href="/">Telemetry Dashboard</a>
+  </div>
+</div>
+<div class="token-bar">
+  <input type="password" id="tok" placeholder="Paste STATS_TOKEN here\u2026" />
+  <button onclick="authenticate()">Connect</button>
+</div>
+
+<div class="main">
+  <div class="error" id="errMsg" style="display:none"></div>
+  <div class="success" id="successMsg" style="display:none"></div>
+
+  <div id="authedContent" style="display:none">
+    <div class="section">
+      <h2 id="formTitle">\u2795 Compose New Notification</h2>
+      <div class="form-grid">
+        <input type="hidden" id="editId" value="" />
+        <div class="form-group">
+          <label>Type</label>
+          <select id="nType" onchange="updatePreview()">
+            <option value="info">Info</option>
+            <option value="warning">Warning</option>
+            <option value="critical">Critical</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Expires At</label>
+          <input type="datetime-local" id="nExpires" />
+        </div>
+        <div class="form-group full">
+          <label>Title</label>
+          <input type="text" id="nTitle" placeholder="Short headline for the notification" oninput="updatePreview()" />
+        </div>
+        <div class="form-group full">
+          <label>Message</label>
+          <textarea id="nMessage" placeholder="Full notification message. Explain what users need to do." oninput="updatePreview()"><\/textarea>
+        </div>
+        <div class="form-group">
+          <label>Min Version <span class="version-hint">(show to users &ge; this version)</span></label>
+          <input type="text" id="nMinVer" placeholder="e.g. 1.0.0" />
+        </div>
+        <div class="form-group">
+          <label>Max Version <span class="version-hint">(show to users &le; this version)</span></label>
+          <input type="text" id="nMaxVer" placeholder="e.g. 1.5.1" />
+        </div>
+        <div class="form-group">
+          <label>Action URL (optional)</label>
+          <input type="text" id="nActionUrl" placeholder="https://github.com/..." oninput="updatePreview()" />
+        </div>
+        <div class="form-group">
+          <label>Action Label (optional)</label>
+          <input type="text" id="nActionLabel" placeholder="e.g. View README" oninput="updatePreview()" />
+        </div>
+        <div class="preview" id="previewArea">
+          <div class="preview-label">Live Preview</div>
+          <div class="preview-card p-info" id="previewCard">
+            <span class="preview-icon" id="previewIcon">\u{2139}\u{fe0f}</span>
+            <div class="preview-content">
+              <div class="preview-title" id="previewTitle">Notification title</div>
+              <div class="preview-msg" id="previewMsg">Notification message will appear here</div>
+            </div>
+          </div>
+        </div>
+        <div class="form-actions">
+          <button class="btn-primary" id="btnSubmit" onclick="submitNotification()">Create Notification</button>
+          <button class="btn-secondary" id="btnCancel" onclick="cancelEdit()" style="display:none">Cancel Edit</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>\u{1f4cb} All Notifications</h2>
+      <div id="notifTable"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+var _token = '';
+var _notifications = [];
+
+function $(i) { return document.getElementById(i); }
+
+function authenticate() {
+  var t = $('tok').value.trim();
+  if (!t) return;
+  _token = t;
+  localStorage.setItem('notif_token', t);
+  loadAll();
+}
+
+async function loadAll() {
+  try {
+    // We need to verify the token by trying to load raw notifications
+    // Use a GET with auth to confirm access
+    var r = await fetch('/v1/stats', { headers: { 'Authorization': 'Bearer ' + _token } });
+    if (r.status === 401) { showErr('Invalid token'); return; }
+    hideErr();
+    $('authedContent').style.display = 'block';
+    await refreshList();
+  } catch(e) { showErr(e.message); }
+}
+
+async function refreshList() {
+  try {
+    // Load all notifications from the file (we'll load the full list including expired)
+    var r = await fetch('/v1/notifications?all=true');
+    if (!r.ok) { showErr('Failed to load notifications'); return; }
+    _notifications = await r.json();
+    renderTable();
+  } catch(e) { showErr(e.message); }
+}
+
+function renderTable() {
+  var tb = $('notifTable');
+  if (!_notifications || _notifications.length === 0) {
+    tb.innerHTML = '<div class="empty">No notifications yet. Create one above!</div>';
+    return;
+  }
+  var now = new Date().toISOString();
+  var html = '<table><thead><tr><th>Type</th><th>Title</th><th>Message</th><th>Version Target</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead><tbody>';
+  for (var i = 0; i < _notifications.length; i++) {
+    var n = _notifications[i];
+    var isExpired = n.expiresAt && n.expiresAt < now;
+    var typeClass = 'type-' + (n.type || 'info');
+    var verTarget = '';
+    if (n.minVersion || n.maxVersion) {
+      verTarget = (n.minVersion ? '\u2265' + n.minVersion : '') + (n.minVersion && n.maxVersion ? ' ' : '') + (n.maxVersion ? '\u2264' + n.maxVersion : '');
+    } else {
+      verTarget = 'All';
+    }
+    html += '<tr>'
+      + '<td><span class="type-badge ' + typeClass + '">' + esc(n.type || 'info') + '</span></td>'
+      + '<td><strong>' + esc(n.title) + '</strong></td>'
+      + '<td style="max-width:280px;white-space:pre-wrap;word-break:break-word;font-size:11px;color:#a0aec0">' + esc(n.message).slice(0, 120) + (n.message.length > 120 ? '\u2026' : '') + '</td>'
+      + '<td class="mono">' + verTarget + '</td>'
+      + '<td><span class="' + (isExpired ? 'status-expired' : 'status-active') + '">' + (isExpired ? 'Expired' : 'Active') + '</span></td>'
+      + '<td class="mono">' + (n.createdAt ? n.createdAt.slice(0, 16) : '\u2014') + '</td>'
+      + '<td style="white-space:nowrap"><button class="btn-edit" onclick="editNotif(' + i + ')">Edit</button> <button class="btn-danger" onclick="deleteNotif(\\'' + esc(n.id) + '\\')">Delete</button></td>'
+      + '</tr>';
+  }
+  html += '</tbody></table>';
+  tb.innerHTML = html;
+}
+
+function editNotif(idx) {
+  var n = _notifications[idx];
+  if (!n) return;
+  $('editId').value = n.id;
+  $('nType').value = n.type || 'info';
+  $('nTitle').value = n.title || '';
+  $('nMessage').value = n.message || '';
+  $('nMinVer').value = n.minVersion || '';
+  $('nMaxVer').value = n.maxVersion || '';
+  $('nActionUrl').value = n.actionUrl || '';
+  $('nActionLabel').value = n.actionLabel || '';
+  if (n.expiresAt) {
+    $('nExpires').value = n.expiresAt.slice(0, 16);
+  } else {
+    $('nExpires').value = '';
+  }
+  $('formTitle').textContent = '\u270f\ufe0f Edit Notification';
+  $('btnSubmit').textContent = 'Update Notification';
+  $('btnCancel').style.display = '';
+  updatePreview();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function cancelEdit() {
+  $('editId').value = '';
+  $('nType').value = 'info';
+  $('nTitle').value = '';
+  $('nMessage').value = '';
+  $('nMinVer').value = '';
+  $('nMaxVer').value = '';
+  $('nActionUrl').value = '';
+  $('nActionLabel').value = '';
+  $('nExpires').value = '';
+  $('formTitle').textContent = '\u2795 Compose New Notification';
+  $('btnSubmit').textContent = 'Create Notification';
+  $('btnCancel').style.display = 'none';
+  updatePreview();
+}
+
+async function submitNotification() {
+  var title = $('nTitle').value.trim();
+  var message = $('nMessage').value.trim();
+  if (!title || !message) { showErr('Title and message are required'); return; }
+
+  var payload = {
+    type: $('nType').value,
+    title: title,
+    message: message,
+    minVersion: $('nMinVer').value.trim() || null,
+    maxVersion: $('nMaxVer').value.trim() || null,
+    actionUrl: $('nActionUrl').value.trim() || null,
+    actionLabel: $('nActionLabel').value.trim() || null,
+    expiresAt: $('nExpires').value ? new Date($('nExpires').value).toISOString() : null,
+  };
+
+  var editId = $('editId').value;
+  if (editId) payload.id = editId;
+
+  $('btnSubmit').disabled = true;
+  try {
+    var r = await fetch('/v1/notifications', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + _token },
+      body: JSON.stringify(payload),
+    });
+    var result = await r.json();
+    if (r.ok && result.ok) {
+      showSuccess(editId ? 'Notification updated!' : 'Notification created!');
+      cancelEdit();
+      await refreshList();
+    } else {
+      showErr(result.error || 'Failed to save notification');
+    }
+  } catch(e) {
+    showErr(e.message);
+  }
+  $('btnSubmit').disabled = false;
+}
+
+async function deleteNotif(id) {
+  if (!confirm('Delete this notification?')) return;
+  try {
+    var r = await fetch('/v1/notifications/' + encodeURIComponent(id), {
+      method: 'DELETE',
+      headers: { 'Authorization': 'Bearer ' + _token },
+    });
+    var result = await r.json();
+    if (r.ok && result.ok) {
+      showSuccess('Notification deleted');
+      await refreshList();
+    } else {
+      showErr(result.error || 'Failed to delete');
+    }
+  } catch(e) { showErr(e.message); }
+}
+
+var ICONS = { info: '\u{2139}\u{fe0f}', warning: '\u26a0\ufe0f', critical: '\u{1f6a8}' };
+
+function updatePreview() {
+  var type = $('nType').value;
+  var title = $('nTitle').value || 'Notification title';
+  var msg = $('nMessage').value || 'Notification message will appear here';
+  var actionUrl = $('nActionUrl').value;
+  var actionLabel = $('nActionLabel').value || 'Learn More';
+  var card = $('previewCard');
+  card.className = 'preview-card p-' + type;
+  $('previewIcon').textContent = ICONS[type] || ICONS.info;
+  $('previewTitle').textContent = title;
+  var html = esc(msg);
+  if (actionUrl) html += '<br/><a class="preview-btn" href="#" onclick="return false">' + esc(actionLabel) + '</a>';
+  $('previewMsg').innerHTML = html;
+}
+
+function esc(s) { if (!s) return ''; return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function showErr(m) { $('errMsg').textContent = '\u26a0 ' + m; $('errMsg').style.display = ''; setTimeout(function(){ $('errMsg').style.display='none'; }, 8000); }
+function hideErr() { $('errMsg').style.display = 'none'; }
+function showSuccess(m) { $('successMsg').textContent = '\u2713 ' + m; $('successMsg').style.display = ''; setTimeout(function(){ $('successMsg').style.display='none'; }, 4000); }
+
+// Auto-connect from saved token
+var saved = localStorage.getItem('notif_token');
+if (saved) { _token = saved; $('tok').value = saved; loadAll(); }
+updatePreview();
+<\/script>
+</body></html>`;
+}
+
 // ── HTTP Server ──────────────────────────────────────────────────────
 function readBody(req) {
 	return new Promise((resolve, reject) => {
@@ -726,6 +1141,119 @@ const server = createServer(async (req, res) => {
 	if (method === "GET" && (url === "/" || url === "/dashboard")) {
 		res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
 		res.end(buildDashboardHtml());
+		return;
+	}
+
+	// Notifications Admin UI
+	if (method === "GET" && url === "/notifications") {
+		res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+		res.end(buildNotificationsAdminHtml());
+		return;
+	}
+
+	// ── Notifications API ──────────────────────────────────────────
+	// GET /v1/notifications — Public, returns active notifications
+	// Add ?all=true to load all (including expired) for admin UI
+	if (method === "GET" && url.startsWith("/v1/notifications")) {
+		try {
+			const q = parseQueryString(url);
+			if (q.all === "true") {
+				// Return ALL notifications (for admin management UI)
+				res.writeHead(200, { "Content-Type": "application/json" });
+				res.end(JSON.stringify(loadNotifications()));
+			} else {
+				const clientVersion = q.version || null;
+				const active = getActiveNotifications(clientVersion);
+				res.writeHead(200, { "Content-Type": "application/json" });
+				res.end(JSON.stringify(active));
+			}
+		} catch (err) {
+			res.writeHead(500, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: "Failed to load notifications" }));
+		}
+		return;
+	}
+
+	// POST /v1/notifications — Create/update notification (auth required)
+	if (method === "POST" && url === "/v1/notifications") {
+		if (!STATS_TOKEN) {
+			res.writeHead(403, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: "STATS_TOKEN not configured" }));
+			return;
+		}
+		const auth = req.headers.authorization || "";
+		if (auth !== `Bearer ${STATS_TOKEN}`) {
+			res.writeHead(401, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: "Unauthorized" }));
+			return;
+		}
+		try {
+			const body = await readBody(req);
+			const data = JSON.parse(body);
+			if (!data.title || !data.message) {
+				res.writeHead(400, { "Content-Type": "application/json" });
+				res.end(JSON.stringify({ error: "title and message are required" }));
+				return;
+			}
+			const notifications = loadNotifications();
+			const notification = {
+				id: data.id || randomUUID(),
+				type: data.type || "info",
+				title: data.title,
+				message: data.message,
+				createdAt: data.createdAt || new Date().toISOString(),
+				expiresAt: data.expiresAt || null,
+				minVersion: data.minVersion || null,
+				maxVersion: data.maxVersion || null,
+				actionUrl: data.actionUrl || null,
+				actionLabel: data.actionLabel || null,
+			};
+			// Update if id exists, otherwise add
+			const existingIdx = notifications.findIndex((n) => n.id === notification.id);
+			if (existingIdx >= 0) {
+				notifications[existingIdx] = notification;
+			} else {
+				notifications.push(notification);
+			}
+			saveNotifications(notifications);
+			res.writeHead(200, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ ok: true, notification }));
+		} catch (err) {
+			res.writeHead(400, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: "Bad request" }));
+		}
+		return;
+	}
+
+	// DELETE /v1/notifications/:id — Remove notification (auth required)
+	if (method === "DELETE" && url.startsWith("/v1/notifications/")) {
+		if (!STATS_TOKEN) {
+			res.writeHead(403, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: "STATS_TOKEN not configured" }));
+			return;
+		}
+		const auth = req.headers.authorization || "";
+		if (auth !== `Bearer ${STATS_TOKEN}`) {
+			res.writeHead(401, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: "Unauthorized" }));
+			return;
+		}
+		try {
+			const id = decodeURIComponent(url.slice("/v1/notifications/".length));
+			const notifications = loadNotifications();
+			const filtered = notifications.filter((n) => n.id !== id);
+			if (filtered.length === notifications.length) {
+				res.writeHead(404, { "Content-Type": "application/json" });
+				res.end(JSON.stringify({ error: "Notification not found" }));
+				return;
+			}
+			saveNotifications(filtered);
+			res.writeHead(200, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ ok: true, deleted: id }));
+		} catch {
+			res.writeHead(500, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: "Failed to delete notification" }));
+		}
 		return;
 	}
 

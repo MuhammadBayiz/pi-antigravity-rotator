@@ -27,7 +27,7 @@ const telemetryLogger = logger.child("telemetry");
 // Update this URL to your VPS before publishing to npm.
 const TELEMETRY_ENDPOINT = "http://telemetry.dragont.ec:3800/v1/events";
 
-const HEARTBEAT_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
+const HEARTBEAT_INTERVAL_MS = 1 * 60 * 60 * 1000; // 1 hour
 const SEND_TIMEOUT_MS = 5000;
 
 // ── Known flag patterns (same list used in proxy.ts for detection) ───

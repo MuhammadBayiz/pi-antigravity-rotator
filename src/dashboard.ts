@@ -1033,6 +1033,120 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   .btn-update-dismiss:hover {
     color: var(--text);
   }
+
+  /* ── Admin Notification Banners ── */
+  .notif-container {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 2px;
+  }
+
+  .notif-banner {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 18px;
+    border-radius: var(--radius);
+    animation: bannerSlideIn 0.4s ease-out;
+  }
+
+  .notif-banner.notif-info {
+    background: linear-gradient(135deg, rgba(96, 165, 250, 0.10), rgba(99, 179, 237, 0.06));
+    border: 1px solid rgba(96, 165, 250, 0.30);
+  }
+
+  .notif-banner.notif-warning {
+    background: linear-gradient(135deg, rgba(251, 191, 36, 0.10), rgba(246, 224, 94, 0.06));
+    border: 1px solid rgba(251, 191, 36, 0.30);
+  }
+
+  .notif-banner.notif-critical {
+    background: linear-gradient(135deg, rgba(248, 113, 113, 0.12), rgba(252, 129, 129, 0.06));
+    border: 1px solid rgba(248, 113, 113, 0.35);
+    animation: bannerSlideIn 0.4s ease-out, notifPulse 3s ease-in-out 1;
+  }
+
+  @keyframes notifPulse {
+    0%, 100% { box-shadow: none; }
+    50% { box-shadow: 0 0 16px rgba(248, 113, 113, 0.25); }
+  }
+
+  .notif-icon {
+    font-size: 18px;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+
+  .notif-content {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .notif-title {
+    font-weight: 700;
+    font-size: 13px;
+    margin-bottom: 3px;
+  }
+
+  .notif-info .notif-title { color: var(--blue); }
+  .notif-warning .notif-title { color: var(--yellow); }
+  .notif-critical .notif-title { color: var(--red); }
+
+  .notif-msg {
+    font-size: 12px;
+    color: var(--text-dim);
+    line-height: 1.45;
+  }
+
+  .notif-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+    align-items: center;
+  }
+
+  .notif-action-btn {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    text-decoration: none;
+    border: 1px solid rgba(255,255,255,0.15);
+    color: var(--text);
+    background: rgba(255,255,255,0.06);
+    cursor: pointer;
+    font-family: var(--font);
+    transition: background 0.2s;
+  }
+
+  .notif-action-btn:hover {
+    background: rgba(255,255,255,0.12);
+  }
+
+  .notif-dismiss {
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    font-size: 16px;
+    padding: 4px;
+    line-height: 1;
+    opacity: 0.6;
+    transition: opacity 0.2s;
+    flex-shrink: 0;
+    margin-left: auto;
+  }
+
+  .notif-dismiss:hover {
+    opacity: 1;
+    color: var(--text);
+  }
+
+  .notif-bell-dot {
+    background: var(--yellow);
+  }
 </style>
 </head>
 <body>
@@ -1042,6 +1156,8 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   <div class="update-message" id="updateMessage"></div>
   <div class="update-banner-actions" id="updateActions"></div>
 </div>
+
+<div class="notif-container" id="notifContainer"></div>
 
 <div class="header">
   <div class="header-main">
@@ -1402,6 +1518,7 @@ function renderAccounts(data) {
     '<div class="ops-warning">' + freshPolicyHint + '</div>';
 
   renderUpdateBanner(data.updateInfo);
+  renderNotifications(data.notifications);
   renderAttentionPanel(data);
   renderTokenChart(data.tokenUsage);
   renderHeatmap(data.tokenUsage);
@@ -2575,6 +2692,76 @@ function clearPendingRestart() {
   localStorage.removeItem('updatePendingRestart');
   var banner = document.getElementById('updateBanner');
   if (banner) banner.className = 'update-banner';
+}
+
+// ── Admin Notifications ──
+var NOTIF_ICONS = { info: '\u{2139}\ufe0f', warning: '\u26a0\ufe0f', critical: '\u{1f6a8}' };
+
+function renderNotifications(notifications) {
+  var container = document.getElementById('notifContainer');
+  if (!container) return;
+  if (!notifications || notifications.length === 0) {
+    container.innerHTML = '';
+    updateNotifBellBadge(0);
+    return;
+  }
+
+  var visibleCount = 0;
+  var html = '';
+  for (var i = 0; i < notifications.length; i++) {
+    var n = notifications[i];
+    // Check if user dismissed this notification
+    if (localStorage.getItem('notif-dismissed-' + n.id)) continue;
+    visibleCount++;
+    var icon = NOTIF_ICONS[n.type] || NOTIF_ICONS.info;
+    var typeClass = 'notif-' + (n.type || 'info');
+    html += '<div class="notif-banner ' + typeClass + '" id="notif-' + escapeHtml(n.id) + '">';
+    html += '<span class="notif-icon">' + icon + '</span>';
+    html += '<div class="notif-content">';
+    html += '<div class="notif-title">' + escapeHtml(n.title) + '</div>';
+    html += '<div class="notif-msg">' + escapeHtml(n.message) + '</div>';
+    if (n.actionUrl) {
+      html += '<div class="notif-actions">';
+      html += '<a class="notif-action-btn" href="' + escapeHtml(n.actionUrl) + '" target="_blank">' + escapeHtml(n.actionLabel || 'Learn More') + '</a>';
+      html += '</div>';
+    }
+    html += '</div>';
+    html += '<button class="notif-dismiss" onclick="dismissNotification(\\'' + escapeHtml(n.id) + '\\')" title="Dismiss">&times;</button>';
+    html += '</div>';
+  }
+  container.innerHTML = html;
+  updateNotifBellBadge(visibleCount);
+}
+
+function dismissNotification(id) {
+  localStorage.setItem('notif-dismissed-' + id, '1');
+  var el = document.getElementById('notif-' + id);
+  if (el) {
+    el.style.opacity = '0';
+    el.style.transform = 'translateY(-10px)';
+    el.style.transition = 'opacity 0.3s, transform 0.3s';
+    setTimeout(function() { el.remove(); }, 300);
+  }
+  // Recount visible
+  var container = document.getElementById('notifContainer');
+  if (container) {
+    var remaining = container.querySelectorAll('.notif-banner').length - 1;
+    updateNotifBellBadge(Math.max(0, remaining));
+  }
+}
+
+function updateNotifBellBadge(count) {
+  // Update the attention bell badge if it exists
+  var bellBtn = document.querySelector('.header-icon-btn.attention');
+  if (!bellBtn) return;
+  var badge = bellBtn.querySelector('.header-icon-badge');
+  if (count > 0) {
+    bellBtn.classList.add('has-items');
+    if (badge) {
+      badge.textContent = String(count);
+      badge.style.display = '';
+    }
+  }
 }
 </script>
 </body>
