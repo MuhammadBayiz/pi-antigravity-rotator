@@ -1090,7 +1090,7 @@ function renderQuotaBars(account) {
         var isRolling7d = q.percentRemaining === 100 && Math.abs(remaining - (7 * 86400000)) < 600000; // Within 10 min of 7d
         
         if (isRolling5h || isRolling7d) {
-          resetLabel = '<span style="color:var(--green)">100% ready</span>';
+          resetLabel = '<span style="color:var(--text-dim)">idle</span>';
         } else {
           resetLabel = formatDuration(remaining);
         }
@@ -1141,10 +1141,10 @@ function renderDualWindows(account) {
           var was5h = (t.pro.resetTimeMs - t.pro.lastSeen) < (24 * 3600 * 1000);
           if (was5h) {
             pQuota = Math.min(100, pQuota + 40);
-            pReset = '<span style="color:var(--green)">+40% ready</span>';
+            pReset = '<span style="color:var(--green)">+40% idle</span>';
           } else {
             pQuota = 100;
-            pReset = '<span style="color:var(--green)">100% ready</span>';
+            pReset = '<span style="color:var(--text-dim)">idle</span>';
           }
         }
       }
@@ -1177,10 +1177,10 @@ function renderDualWindows(account) {
           var fWas5h = (t.free.resetTimeMs - t.free.lastSeen) < (24 * 3600 * 1000);
           if (fWas5h) {
             fQuota = Math.min(100, fQuota + 40);
-            fReset = '<span style="color:var(--green)">+40% ready</span>';
+            fReset = '<span style="color:var(--green)">+40% idle</span>';
           } else {
             fQuota = 100;
-            fReset = '<span style="color:var(--green)">100% ready</span>';
+            fReset = '<span style="color:var(--text-dim)">idle</span>';
           }
         }
       }
@@ -1590,26 +1590,59 @@ function renderTokenChart(tokenUsage) {
     return periodStr;
   }
 
+  // Pad buckets with zeroes up to current time
+  function padBuckets(data, view) {
+    if (!data) data = [];
+    var now = new Date();
+    var stepMs = 60000;
+    var count = 60;
+    var type = 'raw';
+    
+    if (view === '1h') { stepMs = 60000; count = 60; }
+    else if (view === '2h') { stepMs = 60000; count = 120; }
+    else if (view === '4h') { stepMs = 120000; count = 120; type = '2min'; }
+    else if (view === '8h') { stepMs = 240000; count = 120; type = '4min'; }
+    else if (view === '12h') { stepMs = 300000; count = 144; type = '5min'; }
+    else if (view === '1d') { stepMs = 3600000; count = 24; type = 'hour'; }
+    else if (view === '7d') { stepMs = 86400000; count = 7; type = 'day'; }
+    else { stepMs = 86400000; count = 30; type = 'day'; }
+
+    var dataMap = {};
+    data.forEach(function(b) {
+       var k = type === 'raw' ? b.period : getLocalKey(b.period, type);
+       dataMap[k] = b;
+    });
+
+    var result = [];
+    // Go backwards from now to fill the array
+    for (var i = count - 1; i >= 0; i--) {
+       var d = new Date(now.getTime() - (i * stepMs));
+       var k = type === 'raw' ? d.toISOString().slice(0, 16) : getLocalKey(d.toISOString(), type);
+       result.push(dataMap[k] || { period: k, inputTokens: 0, outputTokens: 0, requests: 0, byModel: {} });
+    }
+    return result;
+  }
+
   var allTiers = (tokenUsage.months || []).concat(tokenUsage.days || []).concat(tokenUsage.hours || []).concat(tokenUsage.minutes || []);
 
   // Pick tier based on view
   var buckets;
   if (view === '1h') {
-    buckets = (tokenUsage.minutes || []).slice(-60);
+    buckets = padBuckets((tokenUsage.minutes || []), view);
   } else if (view === '2h') {
-    buckets = (tokenUsage.minutes || []).slice(-120);
+    buckets = padBuckets((tokenUsage.minutes || []), view);
   } else if (view === '4h') {
-    buckets = mergeBucketsBy((tokenUsage.minutes || []), function(p) { return getLocalKey(p, '2min'); }, 120);
+    buckets = padBuckets(mergeBucketsBy((tokenUsage.minutes || []), function(p) { return getLocalKey(p, '2min'); }, 120), view);
   } else if (view === '8h') {
-    buckets = mergeBucketsBy((tokenUsage.minutes || []), function(p) { return getLocalKey(p, '4min'); }, 120);
+    buckets = padBuckets(mergeBucketsBy((tokenUsage.minutes || []), function(p) { return getLocalKey(p, '4min'); }, 120), view);
   } else if (view === '12h') {
-    buckets = mergeBucketsBy((tokenUsage.minutes || []), function(p) { return getLocalKey(p, '5min'); }, 144);
+    buckets = padBuckets(mergeBucketsBy((tokenUsage.minutes || []), function(p) { return getLocalKey(p, '5min'); }, 144), view);
   } else if (view === '1d') {
-    buckets = mergeBucketsBy((tokenUsage.hours || []).concat(tokenUsage.minutes || []), function(p) { return getLocalKey(p, 'hour'); }, 24);
+    buckets = padBuckets(mergeBucketsBy((tokenUsage.hours || []).concat(tokenUsage.minutes || []), function(p) { return getLocalKey(p, 'hour'); }, 24), view);
   } else if (view === '7d') {
-    buckets = mergeBucketsBy(allTiers, function(p) { return getLocalKey(p, 'day'); }, 7);
+    buckets = padBuckets(mergeBucketsBy(allTiers, function(p) { return getLocalKey(p, 'day'); }, 7), view);
   } else {
-    buckets = mergeBucketsBy(allTiers, function(p) { return getLocalKey(p, 'day'); }, 30);
+    buckets = padBuckets(mergeBucketsBy(allTiers, function(p) { return getLocalKey(p, 'day'); }, 30), view);
   }
 
   if (!buckets || buckets.length === 0) {

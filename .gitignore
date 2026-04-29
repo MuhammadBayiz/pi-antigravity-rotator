@@ -3,4 +3,5 @@ dist/
 accounts.json
 state.json
 *.log
-cheatsheet.mdtoken-usage.json
+cheatsheet.md
+token-usage.json
