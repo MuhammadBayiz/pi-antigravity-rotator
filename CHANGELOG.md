@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.8.4] - 2026-04-29
+
+### Changed
+- **Dashboard Savings by View**: The "Savings: $X" figure in the token usage chart now reflects only the visible time window (1h / 2h / 4h / 8h / 12h / 1d / 7d / 1m) instead of all-time totals. Per-model savings in the legend also update accordingly. Pricing table (`MODEL_PRICING_CLIENT`) is kept in sync with the server-side `MODEL_PRICING` in `types.ts`.
+
 ## [1.8.3] - 2026-04-29
 
 ### Fixed

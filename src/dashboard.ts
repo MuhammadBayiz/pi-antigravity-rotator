@@ -1475,6 +1475,35 @@ function formatTokenCount(n) {
   return String(n);
 }
 
+// Pricing per 1M tokens (USD) — mirrors server-side MODEL_PRICING in types.ts
+var MODEL_PRICING_CLIENT = {
+  'claude-opus-4-6-thinking': { input: 5.00,  output: 25.00 },
+  'claude-sonnet-4-6':        { input: 3.00,  output: 15.00 },
+  'gemini-3.1-pro':           { input: 2.00,  output: 12.00 },
+  'gemini-3.1-pro-low':       { input: 2.00,  output: 12.00 },
+  'gemini-3.1-pro-high':      { input: 2.00,  output: 12.00 },
+  'gemini-3-flash':           { input: 0.50,  output: 3.00  },
+};
+
+function calcSavingsFromBuckets(buckets) {
+  var byModel = {};
+  var totalUsd = 0;
+  (buckets || []).forEach(function(b) {
+    Object.keys(b.byModel || {}).forEach(function(m) {
+      var d = b.byModel[m];
+      var p = MODEL_PRICING_CLIENT[m];
+      if (!p) return;
+      var usd = (d.inputTokens / 1e6) * p.input + (d.outputTokens / 1e6) * p.output;
+      if (!byModel[m]) byModel[m] = { inputUsd: 0, outputUsd: 0, totalUsd: 0 };
+      byModel[m].inputUsd  += (d.inputTokens  / 1e6) * p.input;
+      byModel[m].outputUsd += (d.outputTokens / 1e6) * p.output;
+      byModel[m].totalUsd  += usd;
+      totalUsd += usd;
+    });
+  });
+  return { totalUsd: totalUsd, byModel: byModel };
+}
+
 window.__tokenView = '1h';
 
 function exportData(format) {
@@ -1711,7 +1740,7 @@ function renderTokenChart(tokenUsage) {
   chart.innerHTML = '<svg width="' + svgWidth + '" height="' + (chartHeight + 20) + '" style="min-width:100%">' +
     yLabels + bars + '</svg>';
 
-  var savings = tokenUsage.savings || { totalUsd: 0, byModel: {} };
+  var savings = calcSavingsFromBuckets(buckets);
   var savingsText = savings.totalUsd > 0
     ? ' · <span style="color:var(--green);font-weight:700">Savings: $' + savings.totalUsd.toFixed(2) + '</span>'
     : '';
