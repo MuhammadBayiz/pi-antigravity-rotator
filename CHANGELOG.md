@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.8.2] - 2026-04-29
+
+### Fixed
+- **Token Usage Overcounting**: `getTokenUsage()` was summing `minutes + hours + days + months` buckets, which are hierarchical rollups of the same data — causing every token to be counted ~4×. Now reads only the raw `minutes` buckets (source of truth). Telemetry payload corrected accordingly. Historical JSONL data on the receiver was inflated; divide by ~4 for real estimates.
+- **Telemetry Dashboard Filters**: Added server-side filtering to `/v1/stats` by `installId`, `version`, `os`, `model`, `from`, `to` query params.
+- **Telemetry Web Dashboard**: Added interactive filter bar with auto-populated dropdowns for all filter dimensions. Active filter indicator shows current scope. Auto-refresh respects active filters.
+- **Telemetry Endpoint**: Updated to `http://telemetry.dragont.ec:3800/v1/events` (port explicit until reverse proxy is configured).
+
 ## [1.8.0] - 2026-04-29
 
 ### Added
