@@ -354,6 +354,14 @@ Flag data is the most valuable signal. It lets us study what behavior patterns l
 - ❌ Request/response bodies
 - ❌ Error message text (only which known keywords matched)
 
+### Endpoint
+
+Telemetry posts to:
+
+```bash
+http://telemetry.dragont.ec:3800/v1/events
+```
+
 ### Opt out
 
 Set the environment variable before starting:

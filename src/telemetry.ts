@@ -25,7 +25,7 @@ const telemetryLogger = logger.child("telemetry");
 
 // ── Public telemetry endpoint (not a secret — anonymous data only) ───
 // Update this URL to your VPS before publishing to npm.
-const TELEMETRY_ENDPOINT = "https://REPLACE_BEFORE_PUBLISH.example.com/v1/events";
+const TELEMETRY_ENDPOINT = "http://telemetry.dragont.ec:3800/v1/events";
 
 const HEARTBEAT_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
 const SEND_TIMEOUT_MS = 5000;
