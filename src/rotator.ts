@@ -924,10 +924,24 @@ export class AccountRotator {
 	}
 
 	getTokenUsage(): TokenUsageData {
-		// Use only the raw minutes buckets — they are the source of truth.
-		// Hours/days/months are consolidated rollups of the same data and
-		// must NOT be summed together with minutes (that would 4x every count).
-		const all = this.tokenBuckets.minutes;
+		// Buckets are hierarchical rollups: minutes → hours → days → months.
+		// A minute period that has already been rolled into an hour bucket must
+		// NOT be counted again. Same logic applies to hours→days and days→months.
+		const hourPeriods = new Set(this.tokenBuckets.hours.map((b) => b.period));
+		const dayPeriods = new Set(this.tokenBuckets.days.map((b) => b.period));
+		const monthPeriods = new Set(this.tokenBuckets.months.map((b) => b.period));
+
+		const minutesFiltered = this.tokenBuckets.minutes.filter(
+			(b) => !hourPeriods.has(b.period.slice(0, 13)),
+		);
+		const hoursFiltered = this.tokenBuckets.hours.filter(
+			(b) => !dayPeriods.has(b.period.slice(0, 10)),
+		);
+		const daysFiltered = this.tokenBuckets.days.filter(
+			(b) => !monthPeriods.has(b.period.slice(0, 7)),
+		);
+
+		const all = [...minutesFiltered, ...hoursFiltered, ...daysFiltered, ...this.tokenBuckets.months];
 		let totalInputTokens = 0;
 		let totalOutputTokens = 0;
 		let totalRequests = 0;
@@ -955,6 +969,17 @@ export class AccountRotator {
 			totalUsd += inputUsd + outputUsd;
 		}
 
+		// Build tokensByModel with raw counts (from deduplicated buckets)
+		const tokensByModel: Record<string, { input: number; output: number; requests: number }> = {};
+		for (const [model, t] of Object.entries(modelTotals)) {
+			tokensByModel[model] = { input: t.input, output: t.output, requests: 0 };
+		}
+		for (const b of all) {
+			for (const [model, data] of Object.entries(b.byModel)) {
+				if (tokensByModel[model]) tokensByModel[model].requests += data.requests;
+			}
+		}
+
 		return {
 			minutes: this.tokenBuckets.minutes.slice().sort((a, b) => a.period.localeCompare(b.period)),
 			hours: this.tokenBuckets.hours.slice().sort((a, b) => a.period.localeCompare(b.period)),
@@ -963,6 +988,7 @@ export class AccountRotator {
 			totalInputTokens,
 			totalOutputTokens,
 			totalRequests,
+			tokensByModel,
 			savings: { totalUsd, byModel },
 		};
 	}

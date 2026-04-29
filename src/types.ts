@@ -303,6 +303,7 @@ export interface TokenUsageData {
 	totalInputTokens: number;
 	totalOutputTokens: number;
 	totalRequests: number;
+	tokensByModel: Record<string, { input: number; output: number; requests: number }>;
 	savings: {
 		totalUsd: number;
 		byModel: Record<string, { inputUsd: number; outputUsd: number; totalUsd: number }>;

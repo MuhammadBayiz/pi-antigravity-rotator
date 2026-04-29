@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.8.3] - 2026-04-29
+
+### Fixed
+- **Token Usage Deduplication (Critical)**: `getTokenUsage()` now correctly excludes minute buckets that have already been rolled up into hour buckets, and hour buckets rolled into day buckets, etc. Previously the hierarchical rollup structure caused all-time totals to be correct only in edge cases. Fixed by filtering each bucket level against the next level up before summing. Exposed `tokensByModel` directly on `TokenUsageData` for clean access in telemetry payload.
+
 ## [1.8.2] - 2026-04-29
 
 ### Fixed

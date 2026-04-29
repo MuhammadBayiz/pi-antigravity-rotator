@@ -114,17 +114,9 @@ export function main(): void {
 	const telemetry = new TelemetryReporter(() => {
 		const status = rotator.getStatus();
 
-		// Use getTokenUsage() which correctly reads only the raw minutes buckets
+		// getTokenUsage() deduplicates rolled-up buckets and exposes tokensByModel
 		const tu = rotator.getTokenUsage();
-		const tokensByModel: Record<string, { input: number; output: number; requests: number }> = {};
-		for (const b of tu.minutes) {
-			for (const [model, data] of Object.entries(b.byModel)) {
-				if (!tokensByModel[model]) tokensByModel[model] = { input: 0, output: 0, requests: 0 };
-				tokensByModel[model].input += data.inputTokens;
-				tokensByModel[model].output += data.outputTokens;
-				tokensByModel[model].requests += data.requests;
-			}
-		}
+		const tokensByModel = tu.tokensByModel;
 
 		return {
 			accountCount: status.accounts.length,
