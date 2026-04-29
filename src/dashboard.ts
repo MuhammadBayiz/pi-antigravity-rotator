@@ -1132,7 +1132,7 @@ function renderDualWindows(account) {
           var isRolling5h = pQuota === 100 && Math.abs(pRemain - (5 * 3600000)) < 600000;
           var isRolling7d = pQuota === 100 && Math.abs(pRemain - (7 * 86400000)) < 600000;
           if (isRolling5h || isRolling7d) {
-             pReset = '<span style="color:var(--green)">ready</span>';
+             pReset = '<span style="color:var(--green)">idle</span>';
           } else {
              pReset = 'resets in ' + formatDuration(pRemain);
           }
@@ -1168,7 +1168,7 @@ function renderDualWindows(account) {
           var isRolling5h = fQuota === 100 && Math.abs(fRemain - (5 * 3600000)) < 600000;
           var isRolling7d = fQuota === 100 && Math.abs(fRemain - (7 * 86400000)) < 600000;
           if (isRolling5h || isRolling7d) {
-             fReset = '<span style="color:var(--green)">ready</span>';
+             fReset = '<span style="color:var(--green)">idle</span>';
           } else {
              fReset = 'resets in ' + formatDuration(fRemain);
           }
