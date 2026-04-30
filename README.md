@@ -423,6 +423,8 @@ pi-antigravity-rotator collects **anonymous usage telemetry** to help understand
 - Pool state: size, healthy count, whether protective pause triggered
 - Time since previous flag
 
+The dashboard shows both raw `Flag Events` and deduped `Unique Flag Incidents` so repeated identical incidents don't inflate the signal.
+
 Flag data is the most valuable signal. It lets us study what behavior patterns lead to flags and improve the rotation algorithm to avoid them — benefiting everyone.
 
 ### What is NEVER collected

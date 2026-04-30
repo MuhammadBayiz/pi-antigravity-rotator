@@ -106,15 +106,20 @@ const MAX_BODY_BYTES = 4096;
 const MAX_MODELS = 20;
 const MAX_STRING_LEN = 128;
 
-function isValidPayload(data) {
+function isCorePayload(data) {
 	if (typeof data !== "object" || data === null) return false;
-	if (!ALLOWED_EVENTS.has(data.event)) return false;
 	if (typeof data.installId !== "string" || data.installId.length > 64) return false;
 	if (typeof data.version !== "string" || data.version.length > MAX_STRING_LEN) return false;
+	if (typeof data.ts !== "string" || data.ts.length > 30) return false;
+
+	return true;
+}
+
+function isHeartbeatPayload(data) {
+	if (!isCorePayload(data)) return false;
 	if (typeof data.nodeVersion !== "string" || data.nodeVersion.length > MAX_STRING_LEN) return false;
 	if (typeof data.os !== "string" || data.os.length > MAX_STRING_LEN) return false;
 	if (typeof data.arch !== "string" || data.arch.length > MAX_STRING_LEN) return false;
-	if (typeof data.ts !== "string" || data.ts.length > 30) return false;
 	if (typeof data.accountCount !== "number" || data.accountCount < 0 || data.accountCount > 1000) return false;
 	if (!Array.isArray(data.modelsUsed) || data.modelsUsed.length > MAX_MODELS) return false;
 	if (typeof data.totalRequests !== "number" || data.totalRequests < 0) return false;
@@ -128,6 +133,41 @@ function isValidPayload(data) {
 	}
 
 	return true;
+}
+
+function isFlagPayload(data) {
+	if (!isCorePayload(data)) return false;
+	if (data.event !== "flag") return false;
+	if (typeof data.flag !== "object" || data.flag === null) return false;
+	const flag = data.flag;
+	if (typeof flag.flagHttpStatus !== "number") return false;
+	if (!Array.isArray(flag.flagPatternsMatched)) return false;
+	if (typeof flag.model !== "string") return false;
+	if (typeof flag.timerType !== "string") return false;
+	if (typeof flag.accountQuotaPercent !== "number") return false;
+	if (typeof flag.wasProAccount !== "boolean") return false;
+	if (typeof flag.accountTotalRequests !== "number") return false;
+	if (typeof flag.accountRequestsLastHour !== "number") return false;
+	if (typeof flag.accountConcurrentAtFlag !== "number") return false;
+	if (typeof flag.poolSize !== "number") return false;
+	if (typeof flag.poolHealthyCount !== "number") return false;
+	if (typeof flag.protectivePauseTriggered !== "boolean") return false;
+	if (typeof flag.uptimeSeconds !== "number") return false;
+	if (typeof flag.timeSinceLastFlagSeconds !== "number") return false;
+
+	const serialized = JSON.stringify(data);
+	if (serialized.includes("@") && /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]/.test(serialized)) {
+		return false;
+	}
+
+	return true;
+}
+
+function isValidPayload(data) {
+	if (typeof data !== "object" || data === null) return false;
+	if (!ALLOWED_EVENTS.has(data.event)) return false;
+	if (data.event === "flag") return isFlagPayload(data);
+	return isHeartbeatPayload(data);
 }
 
 // ── Storage ──────────────────────────────────────────────────────────
@@ -391,6 +431,7 @@ function computeStats(filters = {}) {
 	let flagsOnFreeAccounts = 0;
 	let flagRequestsTotal = 0;
 	let flagCount = 0;
+	const uniqueFlagSignatures = new Set();
 
 	for (const { fl } of flagEvents) {
 		flagCount++;
@@ -401,9 +442,20 @@ function computeStats(filters = {}) {
 		if (fl.wasProAccount) flagsOnProAccounts++;
 		else flagsOnFreeAccounts++;
 		flagRequestsTotal += fl.accountTotalRequests || 0;
+		const signature = JSON.stringify({
+			status: fl.flagHttpStatus,
+			patterns: [...(fl.flagPatternsMatched || [])].sort(),
+			model: fl.model || "",
+			timerType: fl.timerType || "",
+			quota: fl.accountQuotaPercent,
+			pro: !!fl.wasProAccount,
+			pause: !!fl.protectivePauseTriggered,
+		});
+		uniqueFlagSignatures.add(signature);
 	}
 
 	const avgRequestsBeforeFlag = flagCount > 0 ? Math.round(flagRequestsTotal / flagCount) : 0;
+	const uniqueFlagIncidents = uniqueFlagSignatures.size;
 
 	// Build filter options from ALL events (unfiltered) for dropdown population
 	const filterOptions = buildFilterOptions(allEvents, allFlagEvents);
@@ -430,6 +482,7 @@ function computeStats(filters = {}) {
 		featuresUsed: featuresCount,
 		flags: {
 			totalFlags: totalFlags + flagCount,
+			uniqueIncidents: uniqueFlagIncidents,
 			byHttpStatus: flagsByStatus,
 			byPattern: flagsByPattern,
 			byModel: flagsByModel,
@@ -717,7 +770,8 @@ function render(d, filters={}){
     {l:'Boots',v:fmt(d.totalBoots),c:'blue'},
     {l:'Avg Accounts',v:d.avgAccountsPerEvent,c:''},
     {l:'Total Requests',v:fmt(d.totalRequestsAcrossAll),c:'yellow'},
-    {l:'Flags Detected',v:fmt(d.flags?.totalFlags||0),c:'red'},
+    {l:'Flag Events',v:fmt(d.flags?.totalFlags||0),c:'red'},
+    {l:'Unique Flag Incidents',v:fmt(d.flags?.uniqueIncidents||0),c:'red'},
     {l:'Avg Req/Flag',v:fmt(d.flags?.avgRequestsBeforeFlag||0),c:'red'},
     {l:'Period',v:d.period?.from||'—',sub:d.period?.to?'→ '+d.period.to:''},
   ].map(k=>'<div class="kpi '+k.c+'"><div class="label">'+k.l+'</div><div class="value">'+k.v+'</div>'+(k.sub?'<div class="sub">'+k.sub+'</div>':'')+'</div>').join('');

@@ -26,6 +26,7 @@ import {
 	resolveQuotaModelKey,
 	resolveDisplayModelKey,
 } from "./types.js";
+import { reportFlagEvent, FLAG_PATTERNS, type FlagEventData } from "./telemetry.js";
 import { getStatePath } from "./paths.js";
 import { saveAccountsConfig } from "./account-store.js";
 import { getOAuthClientConfig } from "./oauth.js";
@@ -314,6 +315,29 @@ export class AccountRotator {
 		}
 	}
 
+	private reportQuotaPollFlag(account: AccountRuntime, statusCode: number, errorText: string): void {
+		const modelKey = account.quota[0]?.modelKey ?? "quota-poll";
+		const ctx = this.getFlagContext(account, modelKey);
+		const lower = errorText.toLowerCase();
+		const matchedPatterns = FLAG_PATTERNS.filter((p) => lower.includes(p));
+		reportFlagEvent({
+			flagHttpStatus: statusCode,
+			flagPatternsMatched: matchedPatterns.length > 0 ? matchedPatterns : [],
+			model: "quota-poll",
+			timerType: ctx.timerType as FlagEventData["timerType"],
+			accountQuotaPercent: ctx.accountQuotaPercent,
+			wasProAccount: ctx.wasProAccount,
+			accountTotalRequests: account.totalRequests,
+			accountRequestsLastHour: ctx.accountRequestsLastHour,
+			accountConcurrentAtFlag: account.inFlightRequests,
+			poolSize: ctx.poolSize,
+			poolHealthyCount: ctx.poolHealthyCount,
+			protectivePauseTriggered: false,
+			uptimeSeconds: ctx.uptimeSeconds,
+			timeSinceLastFlagSeconds: -1,
+		});
+	}
+
 	private async fetchQuota(account: AccountRuntime): Promise<void> {
 		if (!account.accessToken) return;
 
@@ -333,6 +357,7 @@ export class AccountRotator {
 				if (response.status === 401 || response.status === 403) {
 					const errorText = await response.text();
 					this.log(`${account.config.email}: quota API returned ${response.status}, flagging account`);
+					this.reportQuotaPollFlag(account, response.status, errorText);
 					this.markFlagged(account, `Quota API ${response.status}: ${errorText.slice(0, 300)}`, { triggerProtectivePause: false });
 				}
 				return;

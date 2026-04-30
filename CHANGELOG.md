@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.10.1] - 2026-04-30
+
+### Fixed
+- **Telemetry Flag Validation**: The telemetry receiver now validates `flag` payloads separately from heartbeat payloads, so `quota API 403` flags are written to `YYYY-MM-DD-flags.jsonl` and counted in the dashboard.
+- **Flag Analysis Clarity**: Dashboard flag stats now show both raw `Flag Events` and deduped `Unique Flag Incidents`.
+
 ## [1.10.0] - 2026-04-30
 
 ### Added
