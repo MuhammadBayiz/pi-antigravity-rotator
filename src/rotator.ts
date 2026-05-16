@@ -358,7 +358,7 @@ export class AccountRotator {
 					const errorText = await response.text();
 					this.log(`${account.config.email}: quota API returned ${response.status}, flagging account`);
 					this.reportQuotaPollFlag(account, response.status, errorText);
-					this.markFlagged(account, `Quota API ${response.status}: ${errorText.slice(0, 300)}`, { triggerProtectivePause: false });
+					this.markFlagged(account, `Quota API ${response.status}: ${errorText}`, { triggerProtectivePause: false });
 				}
 				return;
 			}
@@ -1112,14 +1112,15 @@ export class AccountRotator {
 	}
 
 	// Mark an account as exhausted (429 or quota exceeded)
-	markExhausted(account: AccountRuntime, model: string | undefined, cooldownMs: number): void {
+	markExhausted(account: AccountRuntime, model: string | undefined, cooldownMs: number, errorText?: string): void {
 		const now = Date.now();
 		const modelKey = model ? (resolveQuotaModelKey(model) ?? "__default__") : "__default__";
 		account.cooldownsByModel[modelKey] = now + cooldownMs;
 		account.quotaExhaustedAt = now;
 
+		const errorDetail = errorText ? ` | ${errorText}` : "";
 		this.log(
-			`${account.config.label || account.config.email} [${modelKey}]: EXHAUSTED, cooldown ${Math.ceil(cooldownMs / 1000)}s`,
+			`${account.config.label || account.config.email} [${modelKey}]: EXHAUSTED, cooldown ${Math.ceil(cooldownMs / 1000)}s${errorDetail}`,
 			"warn",
 		);
 		this.saveState();

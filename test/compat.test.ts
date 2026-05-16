@@ -33,9 +33,13 @@ describe("compat adapters", () => {
 			],
 		});
 		assert.equal(body.model, "claude-sonnet-4-6");
-		assert.equal(body.requestType, "agent");
-		assert.match(JSON.stringify(body.request), /System: be terse/);
-		assert.match(JSON.stringify(body.request), /User: ping/);
+		const bodyStr = JSON.stringify(body);
+		assert.match(bodyStr, /"project":"compat-placeholder"/);
+		assert.match(bodyStr, /"userAgent":"antigravity"/);
+		assert.match(bodyStr, /"requestType":"agent"/);
+		assert.match(bodyStr, /"systemInstruction":{"role":"user","parts":\[{"text":"<identity>[\s\S]*be terse"}\]}/);
+		const reqStr = JSON.stringify(body.request);
+		assert.match(reqStr, /"contents":\[{"role":"user","parts":\[{"text":"ping"}\]}\]/);
 	});
 
 	it("validates Anthropic messages contract", () => {
@@ -55,8 +59,12 @@ describe("compat adapters", () => {
 			messages: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
 		});
 		assert.equal(body.model, "gemini-3-flash");
-		assert.match(JSON.stringify(body.request), /System: policy/);
-		assert.match(JSON.stringify(body.request), /User: hello/);
+		const bodyStr = JSON.stringify(body);
+		assert.match(bodyStr, /"model":"gemini-3-flash"/);
+		assert.match(bodyStr, /"userAgent":"antigravity"/);
+		assert.match(bodyStr, /"systemInstruction":{"role":"user","parts":\[{"text":"<identity>[\s\S]*policy"}\]}/);
+		const reqStr = JSON.stringify(body.request);
+		assert.match(reqStr, /"contents":\[{"role":"user","parts":\[{"text":"hello"}\]}\]/);
 	});
 
 	it("converts OpenAI data URL images into Antigravity inlineData", () => {

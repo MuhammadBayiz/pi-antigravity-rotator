@@ -3,13 +3,54 @@ import { PayloadTooLargeError, readLimitedBody } from "./body-limit.js";
 import { logger } from "./logger.js";
 import type { AccountRotator } from "./rotator.js";
 import { resolveQuotaModelKey } from "./types.js";
-import { forwardRequest, flattenHeaders, type RequestBody } from "./proxy.js";
+import { withRotation, flattenHeaders, type RequestBody } from "./proxy.js";
+import { ANTIGRAVITY_IDENTITY_PROMPT } from "./antigravity-prompt.js";
 
 const compatLogger = logger.child("compat");
 
 export interface ChatMessage {
 	role: "system" | "user" | "assistant" | "tool";
-	content: string | Array<{ type: string; text?: string; [key: string]: unknown }> | null;
+	content: string | Array<{ type: string; text?: string;[key: string]: unknown }> | null;
+	tool_calls?: OpenAIToolCall[];
+	tool_call_id?: string;
+	name?: string;
+}
+
+export interface OpenAITool {
+	type: "function";
+	function: {
+		name: string;
+		description?: string;
+		parameters?: Record<string, unknown>;
+	};
+}
+
+export interface OpenAIToolCall {
+	id: string;
+	type: "function";
+	function: {
+		name: string;
+		arguments: string;
+	};
+}
+
+export interface OpenAIToolChoice {
+	type: "function";
+	function: { name: string };
+}
+
+// Gemini function calling types
+interface GeminiFunctionDeclaration {
+	name: string;
+	description?: string;
+	parameters?: Record<string, unknown>;
+}
+
+interface GeminiToolConfig {
+	functionCallingConfig: {
+		mode: "AUTO" | "NONE" | "ANY";
+		allowedFunctionNames?: string[];
+	};
 }
 
 export interface OpenAIChatCompletionRequest {
@@ -18,13 +59,15 @@ export interface OpenAIChatCompletionRequest {
 	stream?: boolean;
 	temperature?: number;
 	max_tokens?: number;
+	tools?: OpenAITool[];
+	tool_choice?: unknown;
 	[key: string]: unknown;
 }
 
 export interface AnthropicMessagesRequest {
 	model: string;
 	messages: ChatMessage[];
-	system?: string | Array<{ type: string; text?: string; [key: string]: unknown }>;
+	system?: string | Array<{ type: string; text?: string;[key: string]: unknown }>;
 	stream?: boolean;
 	max_tokens?: number;
 	temperature?: number;
@@ -36,6 +79,7 @@ export interface CompatCompletion {
 	inputTokens: number;
 	outputTokens: number;
 	responseId?: string;
+	toolCalls?: OpenAIToolCall[];
 }
 
 type AntigravityPart = { text: string } | { inlineData: { mimeType: string; data: string } };
@@ -49,7 +93,12 @@ function isNonEmptyString(value: unknown): value is string {
 }
 
 function extractText(content: ChatMessage["content"]): string {
-	return extractParts(content).filter((part): part is { text: string } => "text" in part).map((part) => part.text).join("\n");
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.filter((p) => (p.type === "text" && typeof p.text === "string") || (p.type === "thinking" && typeof p.thinking === "string"))
+		.map((p) => p.type === "thinking" ? `[Thinking]\n${p.thinking}\n[/Thinking]` : p.text)
+		.join("\n");
 }
 
 function dataUrlToInlineData(url: string): AntigravityPart | null {
@@ -68,6 +117,10 @@ function extractParts(content: ChatMessage["content"]): AntigravityPart[] {
 			parts.push({ text: part.text });
 			continue;
 		}
+		if (part.type === "thinking" && typeof part.thinking === "string" && part.thinking) {
+			parts.push({ text: `[Thinking]\n${part.thinking}\n[/Thinking]` });
+			continue;
+		}
 		if (part.type === "image_url" && isRecord(part.image_url) && typeof part.image_url.url === "string") {
 			const inline = dataUrlToInlineData(part.image_url.url);
 			if (inline) parts.push(inline);
@@ -80,8 +133,26 @@ function extractParts(content: ChatMessage["content"]): AntigravityPart[] {
 	return parts;
 }
 
-function hasUnsupportedTools(value: Record<string, unknown>): boolean {
-	return (Array.isArray(value.tools) && value.tools.length > 0) || value.tool_choice !== undefined || Array.isArray(value.functions) || value.function_call !== undefined;
+/** Convert OpenAI tools array to Gemini functionDeclarations */
+function convertOpenAIToolsToGemini(tools: OpenAITool[]): { functionDeclarations: GeminiFunctionDeclaration[] }[] {
+	const decls: GeminiFunctionDeclaration[] = tools
+		.filter((t) => t.type === "function" && isNonEmptyString(t.function?.name))
+		.map((t) => ({
+			name: t.function.name,
+			...(t.function.description ? { description: t.function.description } : {}),
+			...(t.function.parameters ? { parameters: t.function.parameters } : {}),
+		}));
+	return decls.length > 0 ? [{ functionDeclarations: decls }] : [];
+}
+
+/** Convert OpenAI tool_choice to Gemini toolConfig */
+function convertToolChoiceToGemini(toolChoice: unknown): GeminiToolConfig | undefined {
+	if (!toolChoice || toolChoice === "none") return { functionCallingConfig: { mode: "NONE" } };
+	if (toolChoice === "auto" || toolChoice === "required") return { functionCallingConfig: { mode: "AUTO" } };
+	if (isRecord(toolChoice) && toolChoice.type === "function" && isRecord(toolChoice.function) && isNonEmptyString(toolChoice.function.name)) {
+		return { functionCallingConfig: { mode: "ANY", allowedFunctionNames: [toolChoice.function.name] } };
+	}
+	return { functionCallingConfig: { mode: "AUTO" } };
 }
 
 function validateMessages(value: unknown): value is ChatMessage[] {
@@ -115,28 +186,89 @@ export function validateAnthropicMessagesRequest(value: unknown): { ok: true; va
 	return errors.length > 0 ? { ok: false, errors } : { ok: true, value: value as unknown as AnthropicMessagesRequest };
 }
 
+type GeminiContent = { role: "user" | "model"; parts: unknown[] };
+
 export function openAIToAntigravityBody(input: OpenAIChatCompletionRequest): RequestBody {
-	const parts: AntigravityPart[] = [];
-	for (const msg of input.messages) {
-		const prefix = msg.role === "system" ? "System" : msg.role === "assistant" ? "Assistant" : msg.role === "tool" ? "Tool" : "User";
-		const msgParts = extractParts(msg.content);
-		const textParts = msgParts.filter((part): part is { text: string } => "text" in part);
-		const imageParts = msgParts.filter((part): part is { inlineData: { mimeType: string; data: string } } => "inlineData" in part);
-		if (textParts.length > 0) parts.push({ text: `${prefix}: ${textParts.map((part) => part.text).join("\n")}` });
-		parts.push(...imageParts);
+	// Separate system messages from conversation turns
+	const systemParts: string[] = [];
+	const conversationMessages = input.messages.filter((msg) => {
+		if (msg.role === "system") {
+			const text = typeof msg.content === "string" ? msg.content : extractText(msg.content);
+			if (text) systemParts.push(text);
+			return false;
+		}
+		return true;
+	});
+
+	// Build multi-turn contents array
+	const contents: GeminiContent[] = [];
+	for (const msg of conversationMessages) {
+		if (msg.role === "assistant") {
+			const parts: unknown[] = [];
+			// Text content
+			if (msg.content) {
+				const textContent = typeof msg.content === "string" ? msg.content : extractText(msg.content);
+				if (textContent) parts.push({ text: textContent });
+			}
+			// tool_calls → functionCall parts
+			if (Array.isArray(msg.tool_calls)) {
+				for (const tc of msg.tool_calls) {
+					try {
+						const args = typeof tc.function.arguments === "string" ? JSON.parse(tc.function.arguments) : tc.function.arguments;
+						parts.push({ functionCall: { name: tc.function.name, args } });
+					} catch {
+						parts.push({ functionCall: { name: tc.function.name, args: {} } });
+					}
+				}
+			}
+			if (parts.length > 0) contents.push({ role: "model", parts });
+		} else if (msg.role === "tool") {
+			// tool result → functionResponse part
+			const responseText = typeof msg.content === "string" ? msg.content : extractText(msg.content);
+			let responseData: unknown;
+			try { responseData = JSON.parse(responseText); } catch { responseData = { output: responseText }; }
+			const fnName = msg.name || "unknown";
+			contents.push({ role: "user", parts: [{ functionResponse: { name: fnName, response: responseData } }] });
+		} else {
+			// user message
+			const msgParts = extractParts(msg.content);
+			if (msgParts.length > 0) contents.push({ role: "user", parts: msgParts });
+		}
 	}
+
+	if (contents.length === 0) contents.push({ role: "user", parts: [{ text: "Hello" }] });
+
+	// Build tools / toolConfig if present
+	const inputTools = Array.isArray(input.tools) ? (input.tools as OpenAITool[]) : [];
+	const geminiTools = convertOpenAIToolsToGemini(inputTools);
+	const geminiToolConfig = input.tool_choice !== undefined ? convertToolChoiceToGemini(input.tool_choice) : undefined;
+
+	const request: Record<string, unknown> = {
+		contents,
+		generationConfig: {
+			...(typeof input.temperature === "number" ? { temperature: input.temperature } : {}),
+			...(typeof input.max_tokens === "number" ? { maxOutputTokens: input.max_tokens } : {}),
+		},
+	};
+
+	const systemText = systemParts.length > 0
+		? `${ANTIGRAVITY_IDENTITY_PROMPT}\n\n${systemParts.join("\n\n")}`
+		: ANTIGRAVITY_IDENTITY_PROMPT;
+
+	request.systemInstruction = {
+		role: "user",
+		parts: [{ text: systemText }]
+	};
+
+	if (geminiTools.length > 0) request.tools = geminiTools;
+	if (geminiToolConfig) request.toolConfig = geminiToolConfig;
 
 	return {
 		project: "compat-placeholder",
 		model: input.model,
+		userAgent: "antigravity",
 		requestType: "agent",
-		request: {
-			contents: [{ role: "user", parts: parts.length > 0 ? parts : [{ text: "Hello" }] }],
-			generationConfig: {
-				...(typeof input.temperature === "number" ? { temperature: input.temperature } : {}),
-				...(typeof input.max_tokens === "number" ? { maxOutputTokens: input.max_tokens } : {}),
-			},
-		},
+		request,
 	};
 }
 
@@ -159,6 +291,8 @@ export function parseAntigravitySse(raw: string): CompatCompletion {
 	let inputTokens = 0;
 	let outputTokens = 0;
 	let responseId: string | undefined;
+	const toolCallsMap = new Map<string, OpenAIToolCall>();
+	let toolCallIndex = 0;
 
 	for (const line of raw.split(/\r?\n/)) {
 		if (!line.startsWith("data:")) continue;
@@ -172,7 +306,17 @@ export function parseAntigravitySse(raw: string): CompatCompletion {
 			for (const candidate of candidates) {
 				if (!isRecord(candidate) || !isRecord(candidate.content) || !Array.isArray(candidate.content.parts)) continue;
 				for (const part of candidate.content.parts) {
-					if (isRecord(part) && typeof part.text === "string") text += part.text;
+					if (!isRecord(part)) continue;
+					if (typeof part.text === "string") {
+						text += part.text;
+					} else if (isRecord(part.functionCall)) {
+						// Gemini functionCall → OpenAI tool_call
+						const fc = part.functionCall;
+						const name = typeof fc.name === "string" ? fc.name : "unknown";
+						const args = fc.args !== undefined ? JSON.stringify(fc.args) : "{}";
+						const callId = `call_${Date.now().toString(36)}_${toolCallIndex++}`;
+						toolCallsMap.set(name + callId, { id: callId, type: "function", function: { name, arguments: args } });
+					}
 				}
 			}
 			const usage = isRecord(response.usageMetadata) ? response.usageMetadata : isRecord(response.usage) ? response.usage : null;
@@ -187,7 +331,8 @@ export function parseAntigravitySse(raw: string): CompatCompletion {
 		}
 	}
 
-	return { text, inputTokens, outputTokens, responseId };
+	const toolCalls = toolCallsMap.size > 0 ? [...toolCallsMap.values()] : undefined;
+	return { text, inputTokens, outputTokens, responseId, toolCalls };
 }
 
 function writeJson(res: ServerResponse, status: number, payload: unknown, headers: Record<string, string> = {}): void {
@@ -195,15 +340,32 @@ function writeJson(res: ServerResponse, status: number, payload: unknown, header
 	res.end(JSON.stringify(payload));
 }
 
+function summarizeCompatRequest(body: RequestBody): string {
+	const request = isRecord(body.request) ? body.request : {};
+	const contents = Array.isArray(request.contents) ? request.contents : [];
+	const tools = Array.isArray(request.tools) ? request.tools.length : 0;
+	const systemInstruction = isRecord(request.systemInstruction) ? "yes" : "no";
+	return `model=${body.model} userAgent=${body.userAgent || "none"} turns=${contents.length} tools=${tools} systemInstruction=${systemInstruction}`;
+}
+
 function writeOpenAIStream(res: ServerResponse, model: string, completion: CompatCompletion): void {
 	const created = Math.floor(Date.now() / 1000);
 	const id = `chatcmpl-${Date.now().toString(36)}`;
 	res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive" });
 	res.write(`data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }] })}\n\n`);
-	if (completion.text) {
-		res.write(`data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { content: completion.text }, finish_reason: null }] })}\n\n`);
+	if (completion.toolCalls && completion.toolCalls.length > 0) {
+		// Emit tool_call deltas
+		for (let i = 0; i < completion.toolCalls.length; i++) {
+			const tc = completion.toolCalls[i];
+			res.write(`data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { tool_calls: [{ index: i, id: tc.id, type: "function", function: { name: tc.function.name, arguments: tc.function.arguments } }] }, finish_reason: null }] })}\n\n`);
+		}
+		res.write(`data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] })}\n\n`);
+	} else {
+		if (completion.text) {
+			res.write(`data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { content: completion.text }, finish_reason: null }] })}\n\n`);
+		}
+		res.write(`data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\n`);
 	}
-	res.write(`data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\n`);
 	res.write("data: [DONE]\n\n");
 	res.end();
 }
@@ -229,68 +391,36 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
 		throw new Error("Invalid JSON body");
 	}
 }
-
 async function completeViaRotator(
 	req: IncomingMessage,
 	rotator: AccountRotator,
 	body: RequestBody,
 ): Promise<{ completion: CompatCompletion; status: number; errorText?: string }> {
-	const modelKey = resolveQuotaModelKey(body.model) ?? undefined;
-	let lastErrorText = "All accounts exhausted or disabled";
-
-	for (let attempt = 0; attempt < 2; attempt++) {
-		const account = await rotator.getActiveAccount(body.model);
-		if (!account) {
-			const retryAfterMs = rotator.getRetryAfterMs(body.model);
-			return {
-				completion: { text: "", inputTokens: 0, outputTokens: 0 },
-				status: retryAfterMs > 0 ? 429 : 503,
-				errorText: retryAfterMs > 0 ? `${lastErrorText}; retryAfterMs=${retryAfterMs}` : lastErrorText,
-			};
-		}
-
-		try {
-			rotator.recordUpstreamAttempt(account);
-			const response = await forwardRequest(account, body, flattenHeaders(req.headers));
-			if (!response.ok) {
-				const errorText = await response.text().catch(() => "");
-				lastErrorText = errorText || `Upstream returned ${response.status}`;
-				if (response.status === 429) {
-					const retryAfterSeconds = Number(response.headers.get("retry-after"));
-					const cooldownMs = Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0 ? retryAfterSeconds * 1000 : 60_000;
-					rotator.markExhausted(account, body.model, cooldownMs);
-					rotator.recordProvider429(account, body.model, cooldownMs);
-					return { completion: { text: "", inputTokens: 0, outputTokens: 0 }, status: 429, errorText: lastErrorText };
-				}
-				if (response.status >= 500 && attempt === 0) {
-					rotator.markError(account, `${response.status}: ${lastErrorText.slice(0, 200)}`);
-					await rotator.rotateToNext(body.model);
-					continue;
-				}
-				return { completion: { text: "", inputTokens: 0, outputTokens: 0 }, status: response.status, errorText: lastErrorText };
-			}
+	const outcome = await withRotation(rotator, body.model, flattenHeaders(req.headers), body,
+		async (response) => {
 			const raw = await response.text();
 			const completion = parseAntigravitySse(raw);
-			rotator.recordRequest(account, body.model);
 			if (completion.inputTokens > 0 || completion.outputTokens > 0) {
 				rotator.recordTokenUsage(body.model, completion.inputTokens, completion.outputTokens);
 			}
-			return { completion, status: 200 };
-		} catch (err) {
-			lastErrorText = err instanceof Error ? err.message : String(err);
-			rotator.markError(account, lastErrorText.slice(0, 200));
-			if (attempt === 0) {
-				await rotator.rotateToNext(body.model);
-				continue;
-			}
-			return { completion: { text: "", inputTokens: 0, outputTokens: 0 }, status: 502, errorText: lastErrorText };
-		} finally {
-			rotator.finishRequest(account, modelKey);
+			return completion;
+		},
+	);
+	if (!outcome.ok) {
+		if (outcome.status === 404) {
+			compatLogger.warn(
+				`Compat upstream 404 endpoint=${outcome.endpoint || "unknown"} ${summarizeCompatRequest(body)} error=${(outcome.errorText || "").slice(0, 300)}`,
+			);
 		}
+		return {
+			completion: { text: "", inputTokens: 0, outputTokens: 0 },
+			status: outcome.status,
+			errorText: outcome.retryAfterMs ? `${outcome.errorText}; retryAfterMs=${outcome.retryAfterMs}` : outcome.errorText,
+		};
 	}
-
-	return { completion: { text: "", inputTokens: 0, outputTokens: 0 }, status: 502, errorText: lastErrorText };
+	return { completion: outcome.result, status: 200 };
 }
+
 
 export function serveOpenAIModels(res: ServerResponse): void {
 	writeJson(res, 200, {
@@ -314,7 +444,6 @@ export async function handleOpenAIChatCompletions(req: IncomingMessage, res: Ser
 	}
 	const validation = validateOpenAIChatCompletionRequest(parsed);
 	if (!validation.ok) return writeJson(res, 400, { error: { message: validation.errors.join("; "), type: "invalid_request_error" } });
-	if (hasUnsupportedTools(parsed as Record<string, unknown>)) return writeJson(res, 400, { error: { message: "Tool/function calling is not implemented in compatibility adapters yet", type: "invalid_request_error" } });
 
 	const started = Date.now();
 	const result = await completeViaRotator(req, rotator, openAIToAntigravityBody(validation.value));
@@ -326,12 +455,19 @@ export async function handleOpenAIChatCompletions(req: IncomingMessage, res: Ser
 		writeOpenAIStream(res, validation.value.model, result.completion);
 		return;
 	}
+	const hasToolCalls = result.completion.toolCalls && result.completion.toolCalls.length > 0;
 	writeJson(res, 200, {
 		id: `chatcmpl-${started.toString(36)}`,
 		object: "chat.completion",
 		created: Math.floor(started / 1000),
 		model: validation.value.model,
-		choices: [{ index: 0, message: { role: "assistant", content: result.completion.text }, finish_reason: "stop" }],
+		choices: [{
+			index: 0,
+			message: hasToolCalls
+				? { role: "assistant", content: null, tool_calls: result.completion.toolCalls }
+				: { role: "assistant", content: result.completion.text },
+			finish_reason: hasToolCalls ? "tool_calls" : "stop",
+		}],
 		usage: {
 			prompt_tokens: result.completion.inputTokens,
 			completion_tokens: result.completion.outputTokens,
@@ -350,7 +486,6 @@ export async function handleAnthropicMessages(req: IncomingMessage, res: ServerR
 	}
 	const validation = validateAnthropicMessagesRequest(parsed);
 	if (!validation.ok) return writeJson(res, 400, { type: "error", error: { type: "invalid_request_error", message: validation.errors.join("; ") } });
-	if (hasUnsupportedTools(parsed as Record<string, unknown>)) return writeJson(res, 400, { type: "error", error: { type: "invalid_request_error", message: "Tool/function calling is not implemented in compatibility adapters yet" } });
 
 	const started = Date.now();
 	const result = await completeViaRotator(req, rotator, anthropicToAntigravityBody(validation.value));

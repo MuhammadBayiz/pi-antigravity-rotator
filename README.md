@@ -63,10 +63,19 @@ Run `npm run login` once per Google account:
 The tool automatically:
 
 - Creates or updates `accounts.json` with the account credentials
-- Configures `~/.pi/agent/models.json` to point `google-antigravity` at the proxy
 - Configures `~/.pi/agent/auth.json` with proxy-managed credentials
 
 Re-running with the same email updates the existing entry.
+
+### Connecting Pi to the Rotator
+
+Since Pi officially removed the `google-antigravity` native provider, you must connect Pi to the rotator using an **OpenAI-compatible** provider profile.
+
+1. Open Pi's Settings > Providers
+2. Add a new generic/OpenAI-compatible provider
+3. Set the API Base URL to: `http://127.0.0.1:51200/v1/`
+4. Set the API Key to: `antigravity` (or any string, the proxy doesn't validate it)
+5. You can now use any of the models (e.g. `gemini-3-flash`, `gemini-3.1-pro-low`, `claude-sonnet-4-6`, `claude-opus-4-6-thinking`) directly in Pi.
 
 ### Activation rule
 
@@ -348,7 +357,7 @@ Current adapter scope:
 - Text chat/messages.
 - Streaming mode is supported as compatibility SSE. The adapter buffers the upstream Antigravity stream, then emits one OpenAI/Anthropic-compatible final delta. Native token-by-token pass-through is not implemented yet.
 - Image input is supported when sent as base64 data URL (`OpenAI image_url.url = data:image/...;base64,...`) or Anthropic base64 source (`type=image`, `source.type=base64`).
-- Tool/function calling is explicitly rejected with `400` until a safe contract mapper is implemented.
+- **Tool/function calling is fully supported** (OpenAI `tools`/`tool_choice` format and Anthropic `tool_use`/`tool_result` via standard translation to Gemini `functionDeclarations`).
 
 
 ## Development Checks

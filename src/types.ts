@@ -382,11 +382,16 @@ export const CLIENT_SECRET = atob("R09DU1BYLUs1OEZXUjQ4NkxkTEoxbUxCOHNYQzR6NnFEQ
 export const TOKEN_URL = "https://oauth2.googleapis.com/token";
 
 export const ANTIGRAVITY_ENDPOINTS = [
+	"https://daily-cloudcode-pa.googleapis.com",
 	"https://cloudcode-pa.googleapis.com",
 ] as const;
 
 export const QUOTA_API_URL = "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels";
 const ANTIGRAVITY_VERSION = process.env.PI_AI_ANTIGRAVITY_VERSION || "1.107.0";
 export const QUOTA_USER_AGENT = process.env.PI_ROTATOR_QUOTA_USER_AGENT || `antigravity/${ANTIGRAVITY_VERSION} darwin/arm64`;
+export const REQUEST_USER_AGENT = process.env.PI_ROTATOR_REQUEST_USER_AGENT || QUOTA_USER_AGENT;
+export const REQUEST_GOOG_API_CLIENT = process.env.PI_ROTATOR_X_GOOG_API_CLIENT || "google-cloud-sdk vscode_cloudshelleditor/0.1";
+export const REQUEST_CLIENT_METADATA =
+	process.env.PI_ROTATOR_CLIENT_METADATA || JSON.stringify({ ideType: "ANTIGRAVITY", platform: "MACOS", pluginType: "GEMINI" });
 
 export const LONG_TIMER_MS = 7 * 24 * 60 * 60 * 1000; // 7 days

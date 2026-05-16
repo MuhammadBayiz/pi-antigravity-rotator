@@ -2,7 +2,14 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { Readable } from "node:stream";
-import { ANTIGRAVITY_ENDPOINTS, resolveQuotaModelKey, resolveDisplayModelKey } from "./types.js";
+import {
+	ANTIGRAVITY_ENDPOINTS,
+	REQUEST_CLIENT_METADATA,
+	REQUEST_GOOG_API_CLIENT,
+	REQUEST_USER_AGENT,
+	resolveQuotaModelKey,
+	resolveDisplayModelKey,
+} from "./types.js";
 import type { AccountRuntime } from "./types.js";
 import type { AccountRotator } from "./rotator.js";
 import {
@@ -45,6 +52,25 @@ export interface RequestBody {
 	requestId?: string;
 	[key: string]: unknown;
 }
+
+export interface ForwardedResponse {
+	response: Response;
+	endpoint: string;
+}
+
+export interface RotationAttemptContext {
+	account: AccountRuntime;
+	label: string;
+	modelKey: string;
+	displayModelKey: string;
+	requestId: string;
+	requestStartMs: number;
+	endpoint: string;
+}
+
+export type RotationOutcome<T> =
+	| { ok: true; result: T; endpoint: string }
+	| { ok: false; status: number; errorText: string; retryAfterMs?: number; endpoint?: string };
 
 /**
  * Extract retry delay from error response (mirrors pi-mono's extractRetryDelay).
@@ -255,7 +281,7 @@ export async function forwardRequest(
 	account: AccountRuntime,
 	body: RequestBody,
 	originalHeaders: Record<string, string>,
-): Promise<Response> {
+): Promise<ForwardedResponse> {
 	// Swap credentials
 	body.project = account.config.projectId;
 	const requestBody = JSON.stringify(body);
@@ -268,11 +294,20 @@ export async function forwardRequest(
 	};
 	// Remove original authorization (any case) and hop-by-hop headers
 	for (const key of Object.keys(forwardHeaders)) {
-		if (key.toLowerCase() === "authorization") {
+		const lowerKey = key.toLowerCase();
+		if (
+			lowerKey === "authorization" ||
+			lowerKey === "user-agent" ||
+			lowerKey === "x-goog-api-client" ||
+			lowerKey === "client-metadata"
+		) {
 			delete forwardHeaders[key];
 		}
 	}
 	forwardHeaders["Authorization"] = `Bearer ${account.accessToken}`;
+	forwardHeaders["User-Agent"] = REQUEST_USER_AGENT;
+	forwardHeaders["X-Goog-Api-Client"] = REQUEST_GOOG_API_CLIENT;
+	forwardHeaders["Client-Metadata"] = REQUEST_CLIENT_METADATA;
 	delete forwardHeaders["host"];
 	delete forwardHeaders["connection"];
 	delete forwardHeaders["transfer-encoding"];
@@ -298,11 +333,11 @@ export async function forwardRequest(
 
 			if ((response.status === 401 || response.status === 403 || response.status === 404) && endpointIdx < ANTIGRAVITY_ENDPOINTS.length - 1) {
 				log(`Endpoint ${endpoint} returned ${response.status}, cascading...`);
-				response.text().catch(() => {});
+				response.text().catch(() => { });
 				continue;
 			}
 
-			return response;
+			return { response, endpoint };
 		} catch (err) {
 			if (endpointIdx < ANTIGRAVITY_ENDPOINTS.length - 1) {
 				log(`Endpoint ${endpoint} failed: ${err instanceof Error ? err.message : err}, cascading...`);
@@ -313,6 +348,225 @@ export async function forwardRequest(
 	}
 
 	throw new Error("All endpoints failed");
+}
+
+export async function withRotation<T>(
+	rotator: AccountRotator,
+	model: string,
+	originalHeaders: Record<string, string>,
+	body: RequestBody,
+	onSuccess: (response: Response, context: RotationAttemptContext) => Promise<T>,
+): Promise<RotationOutcome<T>> {
+	const sendNoAccountsAvailable = (reason: string): RotationOutcome<T> => {
+		log(`[${model}] No healthy account available: ${reason}`, rotator, "warn");
+		const retryAfterMs = rotator.getRetryAfterMs(model);
+		if (retryAfterMs > 0) {
+			return {
+				ok: false,
+				status: 429,
+				errorText: `All accounts cooling down or model circuit breaker active: ${reason}`,
+				retryAfterMs,
+			};
+		}
+		return {
+			ok: false,
+			status: 503,
+			errorText: `All accounts exhausted or disabled: ${reason}`,
+		};
+	};
+
+	const rotateAndRelease = async (): Promise<AccountRuntime | null> => {
+		const nextAccount = await rotator.rotateToNext(model);
+		if (nextAccount) {
+			rotator.finishRequest(nextAccount, resolveQuotaModelKey(model) ?? undefined);
+		}
+		return nextAccount;
+	};
+
+	for (let attempt = 0; attempt < MAX_ENDPOINT_RETRIES; attempt++) {
+		const account = await rotator.getActiveAccount(model);
+		if (!account) {
+			return sendNoAccountsAvailable("rotation returned no available account");
+		}
+
+		const label = account.config.label || account.config.email;
+		const modelKey = resolveQuotaModelKey(model) ?? model;
+		const displayModelKey = resolveDisplayModelKey(model);
+		const requestId = `${modelKey}-${Date.now().toString(36)}-${attempt + 1}`;
+		const requestStartMs = Date.now();
+		const logRequestEnd = (status: string | number, extra = ""): void => {
+			log(
+				`[${requestId}] END account=${label} model=${model} status=${status}${extra ? ` ${extra}` : ""} totalMs=${Date.now() - requestStartMs}`,
+				rotator,
+				status === 200 || status === 0 ? "info" : "warn",
+			);
+		};
+
+		log(`[${requestId}] START account=${label} model=${model} attempt=${attempt + 1}`, rotator);
+
+		try {
+			const jitterMs = rotator.getSafetyJitterMs(account);
+			if (jitterMs > 0) {
+				log(`[${requestId}] Safety slow-mode jitter ${jitterMs}ms for account/project daily budget pressure`, rotator, "warn");
+				await sleep(jitterMs);
+			}
+
+			rotator.recordUpstreamAttempt(account);
+			const forwarded = await forwardRequest(account, { ...body }, originalHeaders);
+			const { response, endpoint } = forwarded;
+			const context: RotationAttemptContext = {
+				account,
+				label,
+				modelKey,
+				displayModelKey,
+				requestId,
+				requestStartMs,
+				endpoint,
+			};
+
+			if (response.status === 429) {
+				const errorText = await response.text().catch(() => "");
+				const providerResourceExhausted = isResourceExhausted(errorText);
+				const cooldownMs = providerResourceExhausted
+					? RESOURCE_EXHAUSTED_COOLDOWN_MS
+					: capCooldown(extractRetryDelay(errorText, response.headers));
+				log(
+					`[${label}] 429 rate limited${providerResourceExhausted ? " (RESOURCE_EXHAUSTED)" : ""}, cooldown ${Math.ceil(cooldownMs / 1000)}s. Error text: ${errorText.slice(0, 300)}`,
+					rotator,
+					"warn",
+				);
+				rotator.markExhausted(account, model, cooldownMs, errorText.slice(0, 300));
+				rotator.recordProvider429(account, model, cooldownMs);
+				logRequestEnd(429, `cooldownMs=${cooldownMs}${providerResourceExhausted ? " resourceExhausted=true" : ""}`);
+				return {
+					ok: false,
+					status: 429,
+					errorText,
+					retryAfterMs: cooldownMs,
+					endpoint,
+				};
+			}
+
+			if (response.status === 401) {
+				const errorText = await response.text().catch(() => "");
+				log(`[${label}] BLOCKED (401): ${errorText.slice(0, 200)}`, rotator, "error");
+				const lower401 = errorText.toLowerCase();
+				const matched401 = FLAG_PATTERNS.filter((p) => lower401.includes(p));
+				const ctx401 = rotator.getFlagContext(account, modelKey);
+				reportFlagEvent({
+					flagHttpStatus: 401,
+					flagPatternsMatched: matched401.length > 0 ? matched401 : ["blocked_401" as FlagPattern],
+					model: modelKey,
+					timerType: ctx401.timerType as FlagEventData["timerType"],
+					accountQuotaPercent: ctx401.accountQuotaPercent,
+					wasProAccount: ctx401.wasProAccount,
+					accountTotalRequests: account.totalRequests,
+					accountRequestsLastHour: ctx401.accountRequestsLastHour,
+					accountConcurrentAtFlag: account.inFlightRequests,
+					poolSize: ctx401.poolSize,
+					poolHealthyCount: ctx401.poolHealthyCount,
+					protectivePauseTriggered: false,
+					uptimeSeconds: ctx401.uptimeSeconds,
+					timeSinceLastFlagSeconds: -1,
+				});
+
+				rotator.markFlagged(account, `Account blocked (401): ${errorText.slice(0, 300)}`);
+				logRequestEnd(401);
+				const nextAccount = await rotateAndRelease();
+				if (!nextAccount) {
+					return sendNoAccountsAvailable(`no replacement account remained after ${label} was flagged with 401`);
+				}
+				continue;
+			}
+
+			if (response.status === 403) {
+				const errorText = await response.text().catch(() => "");
+				const lower = errorText.toLowerCase();
+				const flagPatternsLocal = ["infring", "suspend", "abus", "terminat", "violat", "banned", "policy", "forbidden", "verif"];
+				const isFlagged = flagPatternsLocal.some((p) => lower.includes(p));
+
+				if (isFlagged) {
+					log(`[${label}] FLAGGED: ${errorText.slice(0, 200)}`, rotator, "error");
+					const matchedPatterns = FLAG_PATTERNS.filter((p) => lower.includes(p));
+					const ctx403 = rotator.getFlagContext(account, modelKey);
+					reportFlagEvent({
+						flagHttpStatus: 403,
+						flagPatternsMatched: matchedPatterns,
+						model: modelKey,
+						timerType: ctx403.timerType as FlagEventData["timerType"],
+						accountQuotaPercent: ctx403.accountQuotaPercent,
+						wasProAccount: ctx403.wasProAccount,
+						accountTotalRequests: account.totalRequests,
+						accountRequestsLastHour: ctx403.accountRequestsLastHour,
+						accountConcurrentAtFlag: account.inFlightRequests,
+						poolSize: ctx403.poolSize,
+						poolHealthyCount: ctx403.poolHealthyCount,
+						protectivePauseTriggered: false,
+						uptimeSeconds: ctx403.uptimeSeconds,
+						timeSinceLastFlagSeconds: -1,
+					});
+
+					rotator.markFlagged(account, errorText.slice(0, 300));
+					logRequestEnd(403);
+					const nextAccount = await rotateAndRelease();
+					if (!nextAccount) {
+						return sendNoAccountsAvailable(`no replacement account remained after ${label} was flagged with 403`);
+					}
+					continue;
+				}
+
+				log(`[${label}] 403: ${errorText.slice(0, 200)}`, rotator, "warn");
+				logRequestEnd(403);
+				return { ok: false, status: 403, errorText, endpoint };
+			}
+
+			if (response.status === 404) {
+				const errorText = await response.text().catch(() => "");
+				log(`[${label}] 404 from ${endpoint}: ${errorText.slice(0, 200)}`, rotator, "warn");
+				logRequestEnd(404, `endpoint=${endpoint}`);
+				return { ok: false, status: 404, errorText, endpoint };
+			}
+
+			if (response.status >= 500) {
+				const errorText = await response.text().catch(() => "");
+				log(`[${label}] Server error ${response.status}: ${errorText.slice(0, 200)}`, rotator, "warn");
+				logRequestEnd(response.status, `endpoint=${endpoint}`);
+				if (response.status === 503) {
+					return { ok: false, status: 503, errorText, endpoint };
+				}
+				rotator.markError(account, `${response.status}: ${errorText.slice(0, 200)}`);
+				const nextAccount = await rotateAndRelease();
+				if (!nextAccount) {
+					return sendNoAccountsAvailable(`no replacement account remained after ${label} failed with ${response.status}`);
+				}
+				continue;
+			}
+
+			const result = await onSuccess(response, context);
+			const shouldRotate = rotator.recordRequest(account, model);
+			logRequestEnd(response.status, `endpoint=${endpoint}`);
+			if (shouldRotate) {
+				await rotateAndRelease();
+			}
+			return { ok: true, result, endpoint };
+		} catch (err) {
+			const formattedError = formatError(err);
+			log(`[${label}] Request failed: ${formattedError}`, rotator, isFetchTransportError(err) ? "warn" : "error");
+			logRequestEnd(isFetchTransportError(err) ? "fetch-error" : 500, `error=${formattedError.slice(0, 120)}`);
+			if (!isFetchTransportError(err)) {
+				rotator.markError(account, formattedError);
+			}
+			const nextAccount = await rotateAndRelease();
+			if (!nextAccount) {
+				return sendNoAccountsAvailable(`no replacement account remained after ${label} request error`);
+			}
+			continue;
+		} finally {
+			rotator.finishRequest(account, resolveQuotaModelKey(model) ?? undefined);
+		}
+	}
+
+	return { ok: false, status: 502, errorText: "All retry attempts failed" };
 }
 
 function log(msg: string, rotator?: AccountRotator, level: "info" | "warn" | "error" = "info"): void {
@@ -428,7 +682,8 @@ async function handleProxyRequest(
 				await sleep(jitterMs);
 			}
 			rotator.recordUpstreamAttempt(account);
-			const response = await forwardRequest(account, { ...body }, flattenHeaders(req.headers));
+			const forwarded = await forwardRequest(account, { ...body }, flattenHeaders(req.headers));
+			const { response, endpoint } = forwarded;
 
 			if (response.status === 429) {
 				const errorText = await response.text().catch(() => "");
@@ -441,7 +696,7 @@ async function handleProxyRequest(
 					"warn",
 				);
 				recordOutcome(429);
-				logRequestEnd(429, `cooldownMs=${cooldownMs}${providerResourceExhausted ? " resourceExhausted=true" : ""}`);
+				logRequestEnd(429, `cooldownMs=${cooldownMs}${providerResourceExhausted ? " resourceExhausted=true" : ""} endpoint=${endpoint}`);
 				rotator.markExhausted(account, body.model, cooldownMs);
 				rotator.recordProvider429(account, body.model, cooldownMs);
 
@@ -464,33 +719,33 @@ async function handleProxyRequest(
 				return;
 			}
 
-				if (response.status === 401) {
-					const errorText = await response.text().catch(() => "");
-					proxyLog(`[${label}] BLOCKED (401): ${errorText.slice(0, 200)}`, "error");
+			if (response.status === 401) {
+				const errorText = await response.text().catch(() => "");
+				proxyLog(`[${label}] BLOCKED (401): ${errorText.slice(0, 200)}`, "error");
 
-					// Telemetry: report flag event BEFORE markFlagged (which may trigger protective pause)
-					const lower401 = errorText.toLowerCase();
-					const matched401 = FLAG_PATTERNS.filter(p => lower401.includes(p));
-					const ctx401 = rotator.getFlagContext(account, modelKey);
-					reportFlagEvent({
-						flagHttpStatus: 401,
-						flagPatternsMatched: matched401.length > 0 ? matched401 : ["blocked_401" as FlagPattern],
-						model: modelKey,
-						timerType: ctx401.timerType as FlagEventData["timerType"],
-						accountQuotaPercent: ctx401.accountQuotaPercent,
-						wasProAccount: ctx401.wasProAccount,
-						accountTotalRequests: account.totalRequests,
-						accountRequestsLastHour: ctx401.accountRequestsLastHour,
-						accountConcurrentAtFlag: account.inFlightRequests,
-						poolSize: ctx401.poolSize,
-						poolHealthyCount: ctx401.poolHealthyCount,
-						protectivePauseTriggered: false, // not yet — markFlagged decides
-						uptimeSeconds: ctx401.uptimeSeconds,
-						timeSinceLastFlagSeconds: -1, // filled by reporter
-					});
+				// Telemetry: report flag event BEFORE markFlagged (which may trigger protective pause)
+				const lower401 = errorText.toLowerCase();
+				const matched401 = FLAG_PATTERNS.filter(p => lower401.includes(p));
+				const ctx401 = rotator.getFlagContext(account, modelKey);
+				reportFlagEvent({
+					flagHttpStatus: 401,
+					flagPatternsMatched: matched401.length > 0 ? matched401 : ["blocked_401" as FlagPattern],
+					model: modelKey,
+					timerType: ctx401.timerType as FlagEventData["timerType"],
+					accountQuotaPercent: ctx401.accountQuotaPercent,
+					wasProAccount: ctx401.wasProAccount,
+					accountTotalRequests: account.totalRequests,
+					accountRequestsLastHour: ctx401.accountRequestsLastHour,
+					accountConcurrentAtFlag: account.inFlightRequests,
+					poolSize: ctx401.poolSize,
+					poolHealthyCount: ctx401.poolHealthyCount,
+					protectivePauseTriggered: false, // not yet — markFlagged decides
+					uptimeSeconds: ctx401.uptimeSeconds,
+					timeSinceLastFlagSeconds: -1, // filled by reporter
+				});
 
-					rotator.markFlagged(account, `Account blocked (401): ${errorText.slice(0, 300)}`);
-					logRequestEnd(401);
+				rotator.markFlagged(account, `Account blocked (401): ${errorText.slice(0, 300)}`);
+				logRequestEnd(401, `endpoint=${endpoint}`);
 				const nextAccount = await rotateAndRelease();
 				if (!nextAccount) {
 					sendNoAccountsAvailable(`no replacement account remained after ${label} was flagged with 401`);
@@ -503,69 +758,69 @@ async function handleProxyRequest(
 				const errorText = await response.text().catch(() => "");
 				const lower = errorText.toLowerCase();
 				const flagPatternsLocal = ["infring", "suspend", "abus", "terminat", "violat", "banned", "policy", "forbidden", "verif"];
-					const isFlagged = flagPatternsLocal.some((p) => lower.includes(p));
+				const isFlagged = flagPatternsLocal.some((p) => lower.includes(p));
 
-					if (isFlagged) {
-						proxyLog(`[${label}] FLAGGED: ${errorText.slice(0, 200)}`, "error");
-						recordOutcome(403);
-						logRequestEnd(403);
+				if (isFlagged) {
+					proxyLog(`[${label}] FLAGGED: ${errorText.slice(0, 200)}`, "error");
+					recordOutcome(403);
+					logRequestEnd(403, `endpoint=${endpoint}`);
 
-						// Telemetry: report flag event with full anonymous context
-						const matchedPatterns = FLAG_PATTERNS.filter(p => lower.includes(p));
-						const ctx403 = rotator.getFlagContext(account, modelKey);
-						reportFlagEvent({
-							flagHttpStatus: 403,
-							flagPatternsMatched: matchedPatterns,
-							model: modelKey,
-							timerType: ctx403.timerType as FlagEventData["timerType"],
-							accountQuotaPercent: ctx403.accountQuotaPercent,
-							wasProAccount: ctx403.wasProAccount,
-							accountTotalRequests: account.totalRequests,
-							accountRequestsLastHour: ctx403.accountRequestsLastHour,
-							accountConcurrentAtFlag: account.inFlightRequests,
-							poolSize: ctx403.poolSize,
-							poolHealthyCount: ctx403.poolHealthyCount,
-							protectivePauseTriggered: false, // not yet
-							uptimeSeconds: ctx403.uptimeSeconds,
-							timeSinceLastFlagSeconds: -1, // filled by reporter
-						});
+					// Telemetry: report flag event with full anonymous context
+					const matchedPatterns = FLAG_PATTERNS.filter(p => lower.includes(p));
+					const ctx403 = rotator.getFlagContext(account, modelKey);
+					reportFlagEvent({
+						flagHttpStatus: 403,
+						flagPatternsMatched: matchedPatterns,
+						model: modelKey,
+						timerType: ctx403.timerType as FlagEventData["timerType"],
+						accountQuotaPercent: ctx403.accountQuotaPercent,
+						wasProAccount: ctx403.wasProAccount,
+						accountTotalRequests: account.totalRequests,
+						accountRequestsLastHour: ctx403.accountRequestsLastHour,
+						accountConcurrentAtFlag: account.inFlightRequests,
+						poolSize: ctx403.poolSize,
+						poolHealthyCount: ctx403.poolHealthyCount,
+						protectivePauseTriggered: false, // not yet
+						uptimeSeconds: ctx403.uptimeSeconds,
+						timeSinceLastFlagSeconds: -1, // filled by reporter
+					});
 
-						rotator.markFlagged(account, errorText.slice(0, 300));
+					rotator.markFlagged(account, errorText.slice(0, 300));
 					const nextAccount = await rotateAndRelease();
 					if (!nextAccount) {
 						sendNoAccountsAvailable(`no replacement account remained after ${label} was flagged with 403`);
 						return;
 					}
 					continue;
-					}
-					// Non-flagging 403: return to client
-					proxyLog(`[${label}] 403: ${errorText.slice(0, 200)}`, "warn");
-					logRequestEnd(403);
-					res.writeHead(403, { "Content-Type": "application/json" });
+				}
+				// Non-flagging 403: return to client
+				proxyLog(`[${label}] 403: ${errorText.slice(0, 200)}`, "warn");
+				logRequestEnd(403, `endpoint=${endpoint}`);
+				res.writeHead(403, { "Content-Type": "application/json" });
 				res.end(errorText || JSON.stringify({ error: "Forbidden" }));
 				return;
 			}
 
-				if (response.status >= 500) {
-					const errorText = await response.text().catch(() => "");
-					proxyLog(`[${label}] Server error ${response.status}: ${errorText.slice(0, 200)}`, "warn");
-					recordOutcome(response.status);
-					logRequestEnd(response.status);
-					if (response.status === 503) {
-						// Return 503 as-is. Capacity errors still consume quota upstream,
-						// so retrying on another account would just burn more quota for nothing.
-						res.writeHead(503, { "Content-Type": "application/json" });
-						res.end(errorText || JSON.stringify({ error: "Server unavailable", account: label, model: body.model }));
-						return;
-					}
-					rotator.markError(account, `${response.status}: ${errorText.slice(0, 200)}`);
-					const nextAccount = await rotateAndRelease();
-					if (!nextAccount) {
-						sendNoAccountsAvailable(`no replacement account remained after ${label} failed with ${response.status}`);
-						return;
-					}
-					continue;
+			if (response.status >= 500) {
+				const errorText = await response.text().catch(() => "");
+				proxyLog(`[${label}] Server error ${response.status}: ${errorText.slice(0, 200)}`, "warn");
+				recordOutcome(response.status);
+				logRequestEnd(response.status, `endpoint=${endpoint}`);
+				if (response.status === 503) {
+					// Return 503 as-is. Capacity errors still consume quota upstream,
+					// so retrying on another account would just burn more quota for nothing.
+					res.writeHead(503, { "Content-Type": "application/json" });
+					res.end(errorText || JSON.stringify({ error: "Server unavailable", account: label, model: body.model }));
+					return;
 				}
+				rotator.markError(account, `${response.status}: ${errorText.slice(0, 200)}`);
+				const nextAccount = await rotateAndRelease();
+				if (!nextAccount) {
+					sendNoAccountsAvailable(`no replacement account remained after ${label} failed with ${response.status}`);
+					return;
+				}
+				continue;
+			}
 
 			// Success or non-error client response
 			const shouldRotate = rotator.recordRequest(account, body.model);
@@ -579,41 +834,41 @@ async function handleProxyRequest(
 
 			res.writeHead(response.status, responseHeaders);
 
-				try {
-					const usage = await streamResponseBody(response.body, req, res, label, proxyLog);
-					const totalMs = Date.now() - requestStartMs;
-					const ttfbMs = usage?.firstByteMs ?? totalMs;
-					rotator.recordLatency(body.model, ttfbMs, totalMs);
-				logRequestEnd(response.status, `ttfbMs=${ttfbMs}`);
-					rotator.recordRequestLog({
-						model: displayModelKey,
-						account: label,
-						statusCode: response.status,
-						ttfbMs,
-						totalMs,
-						inputTokens: usage?.inputTokens ?? 0,
-						outputTokens: usage?.outputTokens ?? 0,
-					});
-					if (usage && (usage.inputTokens > 0 || usage.outputTokens > 0)) {
-						rotator.recordTokenUsage(body.model, usage.inputTokens, usage.outputTokens);
-					}
-				} catch (err) {
-					proxyLog(`[${label}] Stream setup error: ${err}`, "warn");
+			try {
+				const usage = await streamResponseBody(response.body, req, res, label, proxyLog);
+				const totalMs = Date.now() - requestStartMs;
+				const ttfbMs = usage?.firstByteMs ?? totalMs;
+				rotator.recordLatency(body.model, ttfbMs, totalMs);
+				logRequestEnd(response.status, `ttfbMs=${ttfbMs} endpoint=${endpoint}`);
+				rotator.recordRequestLog({
+					model: displayModelKey,
+					account: label,
+					statusCode: response.status,
+					ttfbMs,
+					totalMs,
+					inputTokens: usage?.inputTokens ?? 0,
+					outputTokens: usage?.outputTokens ?? 0,
+				});
+				if (usage && (usage.inputTokens > 0 || usage.outputTokens > 0)) {
+					rotator.recordTokenUsage(body.model, usage.inputTokens, usage.outputTokens);
 				}
-				res.end();
+			} catch (err) {
+				proxyLog(`[${label}] Stream setup error: ${err}`, "warn");
+			}
+			res.end();
 
 			if (shouldRotate) {
 				await rotateAndRelease();
-				}
-				return;
-			} catch (err) {
-				const formattedError = formatError(err);
-				proxyLog(`[${label}] Request failed: ${formattedError}`, isFetchTransportError(err) ? "warn" : "error");
-				recordOutcome(isFetchTransportError(err) ? 0 : 500);
-				logRequestEnd(isFetchTransportError(err) ? "fetch-error" : 500, `error=${formattedError.slice(0, 120)}`);
-				if (!isFetchTransportError(err)) {
-					rotator.markError(account, formattedError);
-				}
+			}
+			return;
+		} catch (err) {
+			const formattedError = formatError(err);
+			proxyLog(`[${label}] Request failed: ${formattedError}`, isFetchTransportError(err) ? "warn" : "error");
+			recordOutcome(isFetchTransportError(err) ? 0 : 500);
+			logRequestEnd(isFetchTransportError(err) ? "fetch-error" : 500, `error=${formattedError.slice(0, 120)}`);
+			if (!isFetchTransportError(err)) {
+				rotator.markError(account, formattedError);
+			}
 			if (res.headersSent) {
 				res.end();
 				return;
