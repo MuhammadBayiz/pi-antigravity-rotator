@@ -1185,6 +1185,11 @@ export class AccountRotator {
 		return Math.floor(min + Math.random() * (max - min + 1));
 	}
 
+	getGlobalDelayMs(): number {
+		return this.config.globalRequestDelayMs ?? 0;
+	}
+
+
 	markError(account: AccountRuntime, error: string): void {
 		account.lastError = error;
 			account.consecutiveErrors++;

@@ -29,6 +29,8 @@ export interface Config {
 	maxConcurrentRequestsPerAccount?: number;
 	// Hard cap on parallel requests per projectId/model. Conservative default is 1.
 	maxConcurrentRequestsPerProjectModel?: number;
+	// Global delay in ms added to every request to slow down traffic and avoid rate limits.
+	globalRequestDelayMs?: number;
 	// Pause projectId/model when several accounts hit provider 429 in a short window. Defaults: 3 hits / 10min / 60min pause.
 	projectCircuitBreaker429Threshold?: number;
 	projectCircuitBreakerWindowMs?: number;

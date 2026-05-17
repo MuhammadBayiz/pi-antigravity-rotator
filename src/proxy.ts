@@ -412,9 +412,16 @@ export async function withRotation<T>(
 
 		try {
 			const jitterMs = rotator.getSafetyJitterMs(account);
-			if (jitterMs > 0) {
-				log(`[${requestId}] Safety slow-mode jitter ${jitterMs}ms for account/project daily budget pressure`, rotator, "warn");
-				await sleep(jitterMs);
+			const globalDelayMs = rotator.getGlobalDelayMs();
+			const totalDelayMs = jitterMs + globalDelayMs;
+			if (totalDelayMs > 0) {
+				if (jitterMs > 0) {
+					log(`[${requestId}] Safety slow-mode jitter ${jitterMs}ms for account/project daily budget pressure`, rotator, "warn");
+				}
+				if (globalDelayMs > 0) {
+					log(`[${requestId}] Global request delay ${globalDelayMs}ms applied to slow down requests`, rotator, "info");
+				}
+				await sleep(totalDelayMs);
 			}
 
 			rotator.recordUpstreamAttempt(account);
@@ -690,9 +697,16 @@ async function handleProxyRequest(
 
 		try {
 			const jitterMs = rotator.getSafetyJitterMs(account);
-			if (jitterMs > 0) {
-				proxyLog(`[${requestId}] Safety slow-mode jitter ${jitterMs}ms for account/project daily budget pressure`, "warn");
-				await sleep(jitterMs);
+			const globalDelayMs = rotator.getGlobalDelayMs();
+			const totalDelayMs = jitterMs + globalDelayMs;
+			if (totalDelayMs > 0) {
+				if (jitterMs > 0) {
+					proxyLog(`[${requestId}] Safety slow-mode jitter ${jitterMs}ms for account/project daily budget pressure`, "warn");
+				}
+				if (globalDelayMs > 0) {
+					proxyLog(`[${requestId}] Global request delay ${globalDelayMs}ms applied to slow down requests`, "info");
+				}
+				await sleep(totalDelayMs);
 			}
 			rotator.recordUpstreamAttempt(account);
 			const forwarded = await forwardRequest(account, { ...body }, flattenHeaders(req.headers));
