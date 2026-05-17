@@ -309,6 +309,11 @@ export async function forwardRequest(
 	forwardHeaders["User-Agent"] = REQUEST_USER_AGENT;
 	forwardHeaders["X-Goog-Api-Client"] = REQUEST_GOOG_API_CLIENT;
 	forwardHeaders["Client-Metadata"] = REQUEST_CLIENT_METADATA;
+	// Claude models on Cloud Code Assist (Antigravity) require this beta header to
+	// return interleaved thinking blocks. Mirrors pi-mono's needsClaudeThinkingBetaHeader.
+	if (/^claude-/i.test(body.model)) {
+		forwardHeaders["anthropic-beta"] = "interleaved-thinking-2025-05-14";
+	}
 	delete forwardHeaders["host"];
 	delete forwardHeaders["connection"];
 	delete forwardHeaders["transfer-encoding"];

@@ -419,9 +419,19 @@ export function anthropicToAntigravityBody(input: AnthropicMessagesRequest): Req
  * Gemini 3 Pro only supports LOW and HIGH; Flash supports MINIMAL/LOW/MEDIUM/HIGH.
  */
 function mapReasoningEffortToThinkingLevel(effort: string | undefined, modelId: string): string | undefined {
-	if (!effort) return undefined;
 	const isGemini3Pro = /gemini-3(?:\.1)?-pro/i.test(modelId);
-	switch (effort.toLowerCase()) {
+	
+	let effectiveEffort = effort;
+	if (!effectiveEffort) {
+		const lowerModel = modelId.toLowerCase();
+		if (lowerModel.endsWith("-high") || lowerModel.includes("claude-")) effectiveEffort = "high";
+		else if (lowerModel.endsWith("-low")) effectiveEffort = "low";
+		else if (lowerModel.includes("gemini-3-flash")) effectiveEffort = "high";
+	}
+
+	if (!effectiveEffort) return undefined;
+
+	switch (effectiveEffort.toLowerCase()) {
 		case "low": return isGemini3Pro ? "LOW" : "LOW";
 		case "medium": return isGemini3Pro ? "HIGH" : "MEDIUM";
 		case "high": return "HIGH";
@@ -635,6 +645,12 @@ async function streamCompatSse(
 					if (!responseId && typeof response.responseId === "string") responseId = response.responseId;
 
 					const candidates = Array.isArray(response.candidates) ? response.candidates : [];
+					if (candidates.length > 0 && candidates[0]?.content?.parts) {
+						// DEBUG LOGGING to see what Google is actually sending for thinking
+						if (candidates[0].content.parts.some((p: any) => p.thought === true || p.text)) {
+							console.log(`[DEBUG] Received parts:`, JSON.stringify(candidates[0].content.parts));
+						}
+					}
 					for (const candidate of candidates) {
 						if (!isRecord(candidate) || !isRecord(candidate.content) || !Array.isArray(candidate.content.parts)) continue;
 						for (const part of candidate.content.parts) {
