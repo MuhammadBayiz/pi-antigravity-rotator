@@ -67,15 +67,15 @@ The tool automatically:
 
 Re-running with the same email updates the existing entry.
 
-### Connecting Pi to the Rotator
+### Connecting Agents to the Rotator
 
-Since Pi officially removed the `google-antigravity` native provider, you must connect Pi to the rotator using an **OpenAI-compatible** provider profile.
+This package is not exclusive to Pi. It can be consumed by **any** agent or frontend (e.g. Pi, Hermes, OpenWebUI) by connecting via an **OpenAI-compatible** provider profile.
 
-1. Open Pi's Settings > Providers
+1. Open your agent's Settings > Providers (or equivalent OpenAI configuration)
 2. Add a new generic/OpenAI-compatible provider
 3. Set the API Base URL to: `http://127.0.0.1:51200/v1/`
 4. Set the API Key to: `antigravity` (or any string, the proxy doesn't validate it)
-5. You can now use any of the models (e.g. `gemini-3-flash`, `gemini-3.1-pro-low`, `claude-sonnet-4-6`, `claude-opus-4-6-thinking`) directly in Pi.
+5. You can now use any of the models (e.g. `gemini-3-flash`, `gemini-3.1-pro-low`, `claude-sonnet-4-6`, `claude-opus-4-6-thinking`) directly in your agent.
 
 ### Activation rule
 
@@ -109,18 +109,18 @@ The dashboard shows:
 ### Proxying
 
 ```
-Pi Agent 1 (Gemini Pro)  --->  localhost:51200  --->  Account A
-Pi Agent 2 (Claude)      --->  localhost:51200  --->  Account C
-Pi Agent 3 (Flash)       --->  localhost:51200  --->  Account A
+Agent 1 (Gemini Pro)  --->  localhost:51200  --->  Account A
+Agent 2 (Claude)      --->  localhost:51200  --->  Account C
+Agent 3 (Flash)       --->  localhost:51200  --->  Account A
                                (this proxy)          (per-model routing)
 ```
 
-1. Pi sends a request to `localhost:51200` with a model name in the body
+1. The agent sends a request to `localhost:51200` with a model name in the body
 2. The proxy resolves the model to a quota key (e.g., `gemini-3.1-pro`)
 3. The best available account for that specific model is selected
 4. The `Authorization` header and `project` field are swapped with real credentials
 5. The request is forwarded (trying daily, autopush, then prod endpoints)
-6. The SSE response streams back to pi transparently
+6. The SSE response streams back to the agent transparently
 
 ### Per-Model Account Selection
 

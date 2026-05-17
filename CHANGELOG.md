@@ -1,13 +1,16 @@
 # Changelog
 
-## [1.11.0] - 2026-05-16
+## [1.11.0] - 2026-05-17
 
 ### Added
-- **Pi agent connection via OpenAI-compatible provider**: Since Pi officially removed the `google-antigravity` provider, the rotator can now be connected to Pi using any OpenAI-compatible provider (e.g. `openai-generic`, `openai-compatible`, or your own custom endpoint). Point the provider base URL to `http://localhost:51200/v1/` and set any non-empty string as the API key. All Antigravity models (`gemini-3-flash`, `gemini-3.1-pro-low`, `gemini-3.1-pro-high`, `claude-sonnet-4-6`, `claude-opus-4-6-thinking`) are available through `GET /v1/models`.
-- **Antigravity identity payload injection**: The compat layer now injects the full Antigravity system prompt (`<identity>…</identity>`) with `role: "user"` in `systemInstruction` when forwarding requests. This is required by the Antigravity sandbox API to accept requests — without it, Google rejects the payload with `429 RESOURCE_EXHAUSTED` even when quota is available. Fix backported from [CLIProxyAPI commit 67985d8](https://github.com/router-for-me/CLIProxyAPI/commit/67985d8226e3447aefecfce1e02237063abc8525) and [Pi issue #554](https://github.com/earendil-works/pi/issues/554).
+- **Universal Agent Support (Pi, Hermes, OpenWebUI, etc.) via OpenAI-compatible provider**: This package is no longer exclusive to the Pi agent. With full tool calling support now implemented, the rotator can be seamlessly consumed by *any* agent using an OpenAI-compatible provider profile. Point the provider base URL to `http://localhost:51200/v1/` and set any non-empty string as the API key. All Antigravity models (`gemini-3-flash`, `gemini-3.1-pro-low`, `gemini-3.1-pro-high`, `claude-sonnet-4-6`, `claude-opus-4-6-thinking`) are available through `GET /v1/models`.
+- **Full tool/function calling support for compatibility adapters**: Safely maps standard OpenAI function definitions into Gemini's format, allowing agents to fully utilize tools.
+- **XML-based tool call parsing**: Processes XML `<model_context>` artifacts from Gemini responses and formats them as standard OpenAI tool calls.
 - **`userAgent: "antigravity"` in request body**: Added the required `userAgent` field to all forwarded payloads so the Antigravity endpoint treats them as first-party agent traffic.
 
 ### Fixed
+- **Gemini schema sanitization**: Converts `anyOf` with `const` patterns in JSON schemas into Gemini-compatible `enum` arrays. Excludes `exclusiveMinimum` and `exclusiveMaximum` keywords to prevent Gemini 400 Bad Request errors.
+- **Multi-turn tool call artifacts**: In multi-turn chat history, previous tool calls and results are now flattened to text to prevent 400 Bad Request rejection from Gemini.
 - **Daily endpoint prioritization**: Added `daily-cloudcode-pa.googleapis.com` as the primary endpoint with `cloudcode-pa.googleapis.com` as fallback. The daily endpoint accepts Antigravity payloads without rate-limiting them as RESOURCE_EXHAUSTED — matching CLIProxyAPI's approach from the same fix.
 - **`modelBreakers` not exposed in `/api/status`**: Model-level circuit breakers were persisted inside the `safety` sub-object of `state.json` but not surfaced in the API status response, making them invisible to operators when debugging "All accounts disabled" errors.
 
