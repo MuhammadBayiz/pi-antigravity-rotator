@@ -383,10 +383,10 @@ export const TOKEN_URL = "https://oauth2.googleapis.com/token";
 
 export const ANTIGRAVITY_ENDPOINTS = [
 	"https://daily-cloudcode-pa.googleapis.com",
-	"https://cloudcode-pa.googleapis.com",
+	// "https://cloudcode-pa.googleapis.com",
 ] as const;
 
-export const QUOTA_API_URL = "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels";
+export const QUOTA_API_URL = "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels";
 const ANTIGRAVITY_VERSION = process.env.PI_AI_ANTIGRAVITY_VERSION || "1.107.0";
 export const QUOTA_USER_AGENT = process.env.PI_ROTATOR_QUOTA_USER_AGENT || `antigravity/${ANTIGRAVITY_VERSION} darwin/arm64`;
 export const REQUEST_USER_AGENT = process.env.PI_ROTATOR_REQUEST_USER_AGENT || QUOTA_USER_AGENT;

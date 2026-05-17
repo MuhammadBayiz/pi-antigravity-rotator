@@ -148,6 +148,10 @@ function sanitizeGeminiSchema(schema: unknown): unknown {
 		"if", "then", "else", "not",
 		"patternProperties", "unevaluatedProperties", "unevaluatedItems",
 		"contentEncoding", "contentMediaType", "examples",
+		"exclusiveMinimum", "exclusiveMaximum", "minimum", "maximum",
+		"multipleOf", "minLength", "maxLength", "pattern",
+		"minItems", "maxItems", "uniqueItems",
+		"minProperties", "maxProperties", "title", "default",
 	]);
 
 	const out: Record<string, unknown> = {};
@@ -303,7 +307,7 @@ export function openAIToAntigravityBody(input: OpenAIChatCompletionRequest): Req
 				if (completedToolAssistantIndices.has(i)) {
 					// Completed tool call: convert to text to avoid thought_signature requirement
 					for (const tc of msg.tool_calls) {
-						parts.push({ text: `[Tool call: ${tc.function.name}(${tc.function.arguments})]` });
+						parts.push({ text: `<tool_call name="${tc.function.name}">\n${tc.function.arguments}\n</tool_call>` });
 					}
 				} else {
 					// Current tool call: use native Gemini functionCall parts
@@ -325,7 +329,7 @@ export function openAIToAntigravityBody(input: OpenAIChatCompletionRequest): Req
 			const fnName = msg.name || "unknown";
 			if (isCompleted) {
 				// Completed result: convert to text
-				contents.push({ role: "user", parts: [{ text: `[Tool result for ${fnName}: ${responseText}]` }] });
+				contents.push({ role: "user", parts: [{ text: `<tool_result name="${fnName}">\n${responseText}\n</tool_result>` }] });
 			} else {
 				// Current result: use native Gemini functionResponse part
 				let responseData: unknown;
@@ -433,8 +437,33 @@ export function parseAntigravitySse(raw: string): CompatCompletion {
 		}
 	}
 
+	let parsedText = text;
+
+	// Intercept legacy hallucinated format: [Tool call: name(args)]
+	const legacyRegex = /\[Tool call:\s*([a-zA-Z0-9_-]+)\(([\s\S]*?)\)\]/g;
+	let match;
+	while ((match = legacyRegex.exec(parsedText)) !== null) {
+		const name = match[1];
+		const args = match[2].trim();
+		const callId = `call_${Date.now().toString(36)}_${toolCallIndex++}`;
+		toolCallsMap.set(name + callId, { id: callId, type: "function", function: { name, arguments: args } });
+	}
+	parsedText = parsedText.replace(legacyRegex, "");
+
+	// Intercept new hallucinated XML format: <tool_call name="name">args</tool_call>
+	const xmlRegex = /<tool_call name="([^"]+)">([\s\S]*?)<\/tool_call>/g;
+	while ((match = xmlRegex.exec(parsedText)) !== null) {
+		const name = match[1];
+		const args = match[2].trim();
+		const callId = `call_${Date.now().toString(36)}_${toolCallIndex++}`;
+		toolCallsMap.set(name + callId, { id: callId, type: "function", function: { name, arguments: args } });
+	}
+	parsedText = parsedText.replace(xmlRegex, "");
+
+	parsedText = parsedText.trim();
+
 	const toolCalls = toolCallsMap.size > 0 ? [...toolCallsMap.values()] : undefined;
-	return { text, inputTokens, outputTokens, responseId, toolCalls };
+	return { text: parsedText, inputTokens, outputTokens, responseId, toolCalls };
 }
 
 function writeJson(res: ServerResponse, status: number, payload: unknown, headers: Record<string, string> = {}): void {
@@ -525,13 +554,25 @@ async function completeViaRotator(
 
 
 export function serveOpenAIModels(res: ServerResponse): void {
+	const models = [
+		{ id: "gemini-3-flash", ctx: 1048576 },
+		{ id: "gemini-3.1-pro-low", ctx: 1048576 },
+		{ id: "gemini-3.1-pro-high", ctx: 1048576 },
+		{ id: "claude-sonnet-4-6", ctx: 500000 },
+		{ id: "claude-opus-4-6-thinking", ctx: 500000 },
+	];
 	writeJson(res, 200, {
 		object: "list",
-		data: ["gemini-3-flash", "gemini-3.1-pro-low", "gemini-3.1-pro-high", "claude-sonnet-4-6", "claude-opus-4-6-thinking"].map((id) => ({
+		data: models.map(({ id, ctx }) => ({
 			id,
 			object: "model",
 			created: 0,
 			owned_by: "pi-antigravity-rotator",
+			context_window: ctx,
+			max_model_len: ctx,
+			meta: {
+				context_length: ctx,
+			}
 		})),
 	});
 }

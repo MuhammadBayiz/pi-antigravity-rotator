@@ -18,7 +18,7 @@ async function main() {
     });
     const tokenData = await tokenRes.json();
 
-    const res = await fetch("https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels", {
+    const res = await fetch("https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels", {
         method: "POST",
         headers: {
             "Authorization": `Bearer ${tokenData.access_token}`,

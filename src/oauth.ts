@@ -120,7 +120,7 @@ export async function discoverProject(accessToken: string): Promise<ProjectDisco
 	};
 
 	const endpoints = [
-		"https://cloudcode-pa.googleapis.com",
+		// "https://cloudcode-pa.googleapis.com",
 		"https://daily-cloudcode-pa.sandbox.googleapis.com",
 	];
 

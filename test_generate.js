@@ -28,7 +28,7 @@ async function main() {
         }
     };
 
-    const res = await fetch("https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse", {
+    const res = await fetch("https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse", {
         method: "POST",
         headers: {
             "Authorization": `Bearer ${tokenData.access_token}`,
