@@ -62,6 +62,8 @@ export interface OpenAIChatCompletionRequest {
 	max_tokens?: number;
 	tools?: OpenAITool[];
 	tool_choice?: unknown;
+	/** OpenAI-style reasoning effort. Mapped to Gemini thinkingLevel. */
+	reasoning_effort?: string;
 	[key: string]: unknown;
 }
 
@@ -77,6 +79,7 @@ export interface AnthropicMessagesRequest {
 
 export interface CompatCompletion {
 	text: string;
+	thinkingText?: string; // Gemini thought blocks (thought: true), emitted as reasoning_content
 	inputTokens: number;
 	outputTokens: number;
 	responseId?: string;
@@ -362,11 +365,19 @@ export function openAIToAntigravityBody(input: OpenAIChatCompletionRequest): Req
 	const geminiTools = convertOpenAIToolsToGemini(inputTools);
 	const geminiToolConfig = input.tool_choice !== undefined ? convertToolChoiceToGemini(input.tool_choice) : undefined;
 
+	// Map OpenAI reasoning_effort → Gemini thinkingLevel
+	const thinkingLevel = mapReasoningEffortToThinkingLevel(input.reasoning_effort, input.model);
+
 	const request: Record<string, unknown> = {
 		contents,
 		generationConfig: {
 			...(typeof input.temperature === "number" ? { temperature: input.temperature } : {}),
 			...(typeof input.max_tokens === "number" ? { maxOutputTokens: input.max_tokens } : {}),
+			// Always request thought blocks. Models that don't support thinking ignore this.
+			thinkingConfig: {
+				includeThoughts: true,
+				...(thinkingLevel ? { thinkingLevel } : {}),
+			},
 		},
 	};
 
@@ -403,8 +414,24 @@ export function anthropicToAntigravityBody(input: AnthropicMessagesRequest): Req
 	});
 }
 
+/**
+ * Maps an OpenAI reasoning_effort string to a Gemini thinkingLevel.
+ * Gemini 3 Pro only supports LOW and HIGH; Flash supports MINIMAL/LOW/MEDIUM/HIGH.
+ */
+function mapReasoningEffortToThinkingLevel(effort: string | undefined, modelId: string): string | undefined {
+	if (!effort) return undefined;
+	const isGemini3Pro = /gemini-3(?:\.1)?-pro/i.test(modelId);
+	switch (effort.toLowerCase()) {
+		case "low": return isGemini3Pro ? "LOW" : "LOW";
+		case "medium": return isGemini3Pro ? "HIGH" : "MEDIUM";
+		case "high": return "HIGH";
+		default: return undefined;
+	}
+}
+
 export function parseAntigravitySse(raw: string): CompatCompletion {
 	let text = "";
+	let thinkingText = "";
 	let inputTokens = 0;
 	let outputTokens = 0;
 	let responseId: string | undefined;
@@ -425,7 +452,12 @@ export function parseAntigravitySse(raw: string): CompatCompletion {
 				for (const part of candidate.content.parts) {
 					if (!isRecord(part)) continue;
 					if (typeof part.text === "string") {
-						text += part.text;
+						// Route thought blocks separately from normal text
+						if (part.thought === true) {
+							thinkingText += part.text;
+						} else {
+							text += part.text;
+						}
 					} else if (isRecord(part.functionCall)) {
 						// Gemini functionCall → OpenAI tool_call
 						const fc = part.functionCall;
@@ -478,7 +510,7 @@ export function parseAntigravitySse(raw: string): CompatCompletion {
 	parsedText = parsedText.trim();
 
 	const toolCalls = toolCallsMap.size > 0 ? [...toolCallsMap.values()] : undefined;
-	return { text: parsedText, inputTokens, outputTokens, responseId, toolCalls };
+	return { text: parsedText, thinkingText: thinkingText || undefined, inputTokens, outputTokens, responseId, toolCalls };
 }
 
 function writeJson(res: ServerResponse, status: number, payload: unknown, headers: Record<string, string> = {}): void {
@@ -499,6 +531,10 @@ function writeOpenAIStream(res: ServerResponse, model: string, completion: Compa
 	const id = `chatcmpl-${Date.now().toString(36)}`;
 	res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive" });
 	res.write(`data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }] })}\n\n`);
+	// Emit reasoning/thinking content first if present
+	if (completion.thinkingText) {
+		res.write(`data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { reasoning_content: completion.thinkingText }, finish_reason: null }] })}\n\n`);
+	}
 	if (completion.toolCalls && completion.toolCalls.length > 0) {
 		// Emit tool_call deltas
 		for (let i = 0; i < completion.toolCalls.length; i++) {
@@ -520,9 +556,17 @@ function writeAnthropicStream(res: ServerResponse, model: string, completion: Co
 	const id = `msg_${Date.now().toString(36)}`;
 	res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive" });
 	res.write(`event: message_start\ndata: ${JSON.stringify({ type: "message_start", message: { id, type: "message", role: "assistant", model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: completion.inputTokens, output_tokens: 0 } } })}\n\n`);
-	res.write(`event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } })}\n\n`);
-	if (completion.text) res.write(`event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: completion.text } })}\n\n`);
-	res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: 0 })}\n\n`);
+	let contentIndex = 0;
+	// Emit thinking block first if present (Anthropic format)
+	if (completion.thinkingText) {
+		res.write(`event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index: contentIndex, content_block: { type: "thinking", thinking: "" } })}\n\n`);
+		res.write(`event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", index: contentIndex, delta: { type: "thinking_delta", thinking: completion.thinkingText } })}\n\n`);
+		res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: contentIndex })}\n\n`);
+		contentIndex++;
+	}
+	res.write(`event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index: contentIndex, content_block: { type: "text", text: "" } })}\n\n`);
+	if (completion.text) res.write(`event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", index: contentIndex, delta: { type: "text_delta", text: completion.text } })}\n\n`);
+	res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: contentIndex })}\n\n`);
 	res.write(`event: message_delta\ndata: ${JSON.stringify({ type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: completion.outputTokens } })}\n\n`);
 	res.write(`event: message_stop\ndata: ${JSON.stringify({ type: "message_stop" })}\n\n`);
 	res.end();
@@ -596,11 +640,20 @@ async function streamCompatSse(
 						for (const part of candidate.content.parts) {
 							if (!isRecord(part)) continue;
 							if (typeof part.text === "string" && part.text) {
-								text += part.text;
-								if (format === "openai") {
-									res.write(`data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { content: part.text }, finish_reason: null }] })}\n\n`);
+								if (part.thought === true) {
+									// Thought block → reasoning_content (OpenAI) or thinking_delta (Anthropic)
+									if (format === "openai") {
+										res.write(`data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { reasoning_content: part.text }, finish_reason: null }] })}\n\n`);
+									} else {
+										res.write(`event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: part.text } })}\n\n`);
+									}
 								} else {
-									res.write(`event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: part.text } })}\n\n`);
+									text += part.text;
+									if (format === "openai") {
+										res.write(`data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { content: part.text }, finish_reason: null }] })}\n\n`);
+									} else {
+										res.write(`event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: part.text } })}\n\n`);
+									}
 								}
 							} else if (isRecord(part.functionCall)) {
 								const fc = part.functionCall;
