@@ -15,7 +15,6 @@ Multi-account rotation proxy for Google Antigravity. Distributes API usage acros
 - **Protective pause** -- Pauses all routing for several hours after serious ToS/abuse-style flags so the rest of the pool is not burned
 - **Token auto-refresh** -- Tokens are refreshed automatically before expiry; no manual management
 - **Endpoint cascade** -- Tries daily, autopush, and prod API endpoints for resilience
-- **Pro Family Advisor** -- Scans your account pool and alerts you if there are major imbalances (like some accounts never getting used because of routing bias), giving you actionable steps to optimize token distribution
 - **Advanced Telemetry & Statistics** -- Track exactly how much USD you save compared to a paid API plan, predict quota depletion with the Forecast grid, view Latency tracking (p50/p95), and explore 60-day historical usage heatmaps
 - **Web dashboard** -- Real-time view of model routing table, per-account quota bars with per-model timers, and flagged account alerts
 - **Auto-update notifications** -- The dashboard checks npm for new releases every 30 minutes and shows a banner with one-click update when a newer version is available
@@ -93,13 +92,12 @@ After starting the proxy, open `http://localhost:51200/dashboard` or `http://<yo
 The dashboard shows:
 
 - **Top Status & Controls** -- Real-time routing state, uptime, requests, and PII masking toggle.
-- **Pro Family Advisor & Dual-Window Tracking** -- Advanced logic that tracks and compares both Pro and Free quota windows simultaneously. The Advisor analyzes cumulative quota to suggest mathematical upgrades/downgrades.
 - **Token Usage & Savings** -- Interactive chart (`1h`, `2h`, `4h`, `8h`, `12h`, `1d`, `7d`, `1m`) showing token consumption by model, with estimated USD savings and `CSV`/`JSON` export options.
 - **Activity Heatmap** -- 60-day responsive GitHub-style contribution grid showing request intensity hour by hour.
 - **Latency (p50/p95)** -- Real-time median and 95th percentile tracking for Time-to-First-Byte (TTFB) and Total Duration per model.
 - **Quota Forecast** -- Predictive modeling showing when each model's quota will run out based on the current requests/hour burn rate.
 - **Searchable Request Log** -- Live feed of the last 200 requests with exact timestamps, models, masked accounts, status codes, and latency.
-- **Account Cards** -- Sorted by total quota. Shows status (`active`, `ready`, `cooldown`, `flagged`, `disabled`), dual-window trackers, quota bars with timers, and precise error messages.
+- **Account Cards** -- Sorted by total quota. Shows status (`active`, `ready`, `cooldown`, `flagged`, `disabled`), quota bars with timers, and precise error messages.
 - **Operator Panels** -- "Attention Needed" summaries for quarantined accounts and a real-time event feed of rotator actions.
 
 ![Dashboard](dashboard.png)

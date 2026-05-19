@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.13.0] - 2026-05-19
+
+### Removed
+- **Pro Family Features**: Completely removed legacy Pro Family sharing infrastructure (Advisor recommendations, dual-window tracking, and associated UI elements) to simplify architecture for unified quota pools.
+
+### Added
+- **Quota Reset Countdown**: Added a new column to the Quota Forecast dashboard component that displays the exact time remaining until the next quota reset.
+- **Token Usage Metrics Output**: The proxy now correctly captures and forwards precise input/output token counts from the upstream API back to the client, fully enabling usage statistics reporting in compatible adapters.
+
 ## [1.12.4] - 2026-05-18
 
 ### Added
