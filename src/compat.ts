@@ -656,6 +656,7 @@ export function openAIToAntigravityBody(input: OpenAIChatCompletionRequest): Req
 	return {
 		project: "compat-placeholder",
 		model: mappedModel,
+		displayModel: input.model,
 		userAgent: "antigravity",
 		requestType: "agent",
 		request,
@@ -1021,13 +1022,13 @@ async function completeViaRotator(
 				const raw = await response.text();
 				const completion = parseAntigravitySse(raw);
 				if (completion.inputTokens > 0 || completion.outputTokens > 0) {
-					rotator.recordTokenUsage(body.model, completion.inputTokens, completion.outputTokens);
+					rotator.recordTokenUsage(body.displayModel || body.model, completion.inputTokens, completion.outputTokens);
 				}
 				return completion;
 			} else {
-				const completion = await streamCompatSse(response.body, req, res, body.model, streamMode);
+				const completion = await streamCompatSse(response.body, req, res, body.displayModel || body.model, streamMode);
 				if (completion.inputTokens > 0 || completion.outputTokens > 0) {
-					rotator.recordTokenUsage(body.model, completion.inputTokens, completion.outputTokens);
+					rotator.recordTokenUsage(body.displayModel || body.model, completion.inputTokens, completion.outputTokens);
 				}
 				return completion;
 			}

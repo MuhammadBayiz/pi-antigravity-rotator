@@ -51,6 +51,7 @@ export interface RequestBody {
 	requestType?: string;
 	userAgent?: string;
 	requestId?: string;
+	displayModel?: string;
 	[key: string]: unknown;
 }
 
@@ -285,7 +286,8 @@ export async function forwardRequest(
 ): Promise<ForwardedResponse> {
 	// Swap credentials
 	body.project = account.config.projectId;
-	const requestBody = JSON.stringify(body);
+	const { displayModel, ...bodyToForward } = body;
+	const requestBody = JSON.stringify(bodyToForward);
 
 	// Build headers: keep originals but swap Authorization
 	const forwardHeaders: Record<string, string> = {
@@ -397,7 +399,7 @@ export async function withRotation<T>(
 
 		const label = account.config.label || account.config.email;
 		const modelKey = resolveQuotaModelKey(model) ?? model;
-		const displayModelKey = resolveDisplayModelKey(model);
+		const displayModelKey = resolveDisplayModelKey(body.displayModel || model);
 		const requestId = `${modelKey}-${Date.now().toString(36)}-${attempt + 1}`;
 		const requestStartMs = Date.now();
 		const logRequestEnd = (status: string | number, extra = ""): void => {
@@ -865,7 +867,7 @@ async function handleProxyRequest(
 				const usage = await streamResponseBody(response.body, req, res, label, proxyLog);
 				const totalMs = Date.now() - requestStartMs;
 				const ttfbMs = usage?.firstByteMs ?? totalMs;
-				rotator.recordLatency(body.model, ttfbMs, totalMs);
+				rotator.recordLatency(body.displayModel || body.model, ttfbMs, totalMs);
 				logRequestEnd(response.status, `ttfbMs=${ttfbMs} endpoint=${endpoint}`);
 				rotator.recordRequestLog({
 					model: displayModelKey,
@@ -877,7 +879,7 @@ async function handleProxyRequest(
 					outputTokens: usage?.outputTokens ?? 0,
 				});
 				if (usage && (usage.inputTokens > 0 || usage.outputTokens > 0)) {
-					rotator.recordTokenUsage(body.model, usage.inputTokens, usage.outputTokens);
+					rotator.recordTokenUsage(body.displayModel || body.model, usage.inputTokens, usage.outputTokens);
 				}
 			} catch (err) {
 				proxyLog(`[${label}] Stream setup error: ${err}`, "warn");
