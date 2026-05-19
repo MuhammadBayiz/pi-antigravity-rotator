@@ -5,7 +5,7 @@ import { openAIToAntigravityBody, parseAntigravitySse, type OpenAIChatCompletion
 describe("OpenAI Compat Tool Calling", () => {
 	it("converts basic messages without tools to multi-turn format", () => {
 		const req: OpenAIChatCompletionRequest = {
-			model: "gemini-3-flash",
+			model: "claude-sonnet-4-6",
 			messages: [
 				{ role: "system", content: "You are a helpful assistant" },
 				{ role: "user", content: "Hello" }
@@ -14,10 +14,10 @@ describe("OpenAI Compat Tool Calling", () => {
 
 		const result = openAIToAntigravityBody(req);
 		assert.strictEqual(result.requestType, "agent");
-		assert.strictEqual(result.model, "gemini-3-flash");
+		assert.strictEqual(result.model, "claude-sonnet-4-6");
 		
 		const request = result.request as any;
-		assert.strictEqual(request.systemInstruction.role, "user");
+		assert.strictEqual(request.systemInstruction.role, "system");
 		assert.strictEqual(request.systemInstruction.parts[0].text, "You are a helpful assistant");
 		assert.deepStrictEqual(request.contents, [
 			{ role: "user", parts: [{ text: "Hello" }] }
@@ -57,7 +57,7 @@ describe("OpenAI Compat Tool Calling", () => {
 
 	it("converts multi-turn conversation with tool calls and tool responses", () => {
 		const req: OpenAIChatCompletionRequest = {
-			model: "gemini-3-flash",
+			model: "claude-sonnet-4-6",
 			messages: [
 				{ role: "user", content: "What is the weather in NYC?" },
 				{ 
@@ -74,8 +74,8 @@ describe("OpenAI Compat Tool Calling", () => {
 
 		assert.deepStrictEqual(request.contents, [
 			{ role: "user", parts: [{ text: "What is the weather in NYC?" }] },
-			{ role: "model", parts: [{ functionCall: { name: "get_weather", args: { location: "NYC" } } }] },
-			{ role: "user", parts: [{ functionResponse: { name: "get_weather", response: { temp: 72 } } }] }
+			{ role: "model", parts: [{ functionCall: { id: "call_123", name: "get_weather", args: { location: "NYC" } } }] },
+			{ role: "user", parts: [{ functionResponse: { id: "call_123", name: "get_weather", response: { temp: 72 } } }] }
 		]);
 	});
 

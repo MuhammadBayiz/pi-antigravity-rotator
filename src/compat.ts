@@ -10,7 +10,7 @@ import { withRotation, flattenHeaders, type RequestBody } from "./proxy.js";
 const compatLogger = logger.child("compat");
 
 export interface ChatMessage {
-	role: "system" | "user" | "assistant" | "tool";
+	role: "system" | "user" | "assistant" | "model" | "tool";
 	content: string | Array<{ type: string; text?: string;[key: string]: unknown }> | null;
 	tool_calls?: OpenAIToolCall[];
 	tool_call_id?: string;
@@ -60,6 +60,8 @@ export interface OpenAIChatCompletionRequest {
 	stream?: boolean;
 	temperature?: number;
 	max_tokens?: number;
+	prompt?: string | string[];
+	input?: unknown;
 	tools?: OpenAITool[];
 	tool_choice?: unknown;
 	/** OpenAI-style reasoning effort. Mapped to Gemini thinkingLevel. */
@@ -96,18 +98,24 @@ interface ModelSpec {
 }
 const MODEL_SPECS: Record<string, ModelSpec> = {
 	"gemini-pro-agent":          { maxOutputTokens: 65535, thinkingBudget: 10001, isThinking: true },
-	"gemini-3-flash-agent":      { maxOutputTokens: 65536, thinkingBudget: -1,    isThinking: true },
+	"gemini-3-flash-agent":      { maxOutputTokens: 65536, thinkingBudget: 10000, isThinking: true },
 	"gemini-3-pro-high":         { maxOutputTokens: 65535, thinkingBudget: 10001, isThinking: true },
 	"gemini-3-pro-low":          { maxOutputTokens: 65535, thinkingBudget: 1001,  isThinking: true },
+	"gemini-3.1-pro":            { maxOutputTokens: 65535, thinkingBudget: 10001, isThinking: true },
 	"gemini-3.1-pro-high":       { maxOutputTokens: 65535, thinkingBudget: 10001, isThinking: true },
 	"gemini-3.1-pro-low":        { maxOutputTokens: 65535, thinkingBudget: 1001,  isThinking: true },
 	"gemini-3.1-pro-preview":    { maxOutputTokens: 65535, thinkingBudget: 10001, isThinking: true },
-	"gemini-3-flash":            { maxOutputTokens: 65536, thinkingBudget: 32768, isThinking: true },
+	"gemini-3.5-flash":          { maxOutputTokens: 65536, thinkingBudget: 10000, isThinking: true },
+	"gemini-3.5-flash-low":      { maxOutputTokens: 65536, thinkingBudget: 4000,  isThinking: true },
+	"gemini-3.5-flash-high":     { maxOutputTokens: 65536, thinkingBudget: 10000, isThinking: true },
+	"gemini-3-flash":            { maxOutputTokens: 65536, thinkingBudget: 4000,  isThinking: true },
 	"gemini-2.5-flash":          { maxOutputTokens: 65535, thinkingBudget: 24576, isThinking: true },
 	"gemini-2.5-pro":            { maxOutputTokens: 65535, thinkingBudget: 1024,  isThinking: true },
 	"claude-sonnet-4-6":         { maxOutputTokens: 64000, thinkingBudget: 32768, isThinking: true },
 	"claude-sonnet-4-6-thinking":{ maxOutputTokens: 64000, thinkingBudget: 32768, isThinking: true },
 	"claude-opus-4-6-thinking":  { maxOutputTokens: 64000, thinkingBudget: 32768, isThinking: true },
+	"gpt-oss-120b-medium":       { maxOutputTokens: 32768, thinkingBudget: 8192,  isThinking: true },
+	"gpt-oss-120b":              { maxOutputTokens: 32768, thinkingBudget: 8192,  isThinking: true },
 };
 const GEMINI_MAX_OUTPUT_TOKENS = 65536;
 const CLAUDE_MAX_OUTPUT_TOKENS = 64000;
@@ -438,16 +446,123 @@ function convertToolChoiceToGemini(toolChoice: unknown): GeminiToolConfig | unde
 function validateMessages(value: unknown): value is ChatMessage[] {
 	return Array.isArray(value) && value.every((msg) => {
 		if (!isRecord(msg)) return false;
-		if (!["system", "user", "assistant", "tool"].includes(String(msg.role))) return false;
+		if (!["system", "user", "assistant", "model", "tool"].includes(String(msg.role))) return false;
 		return typeof msg.content === "string" || msg.content === null || Array.isArray(msg.content);
 	});
+}
+
+function extractTextFromUnknownContent(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.map((part) => {
+			if (typeof part === "string") return part;
+			if (!isRecord(part)) return "";
+			if (typeof part.text === "string") return part.text;
+			if (typeof part.input_text === "string") return part.input_text;
+			if (typeof part.output_text === "string") return part.output_text;
+			return "";
+		})
+		.filter(Boolean)
+		.join("\n");
+}
+
+function normalizeContentBlocks(content: unknown): ChatMessage["content"] {
+	if (typeof content === "string" || content === null) return content;
+	if (!Array.isArray(content)) return extractTextFromUnknownContent(content);
+	const blocks = content.flatMap((part) => {
+		if (typeof part === "string") return [{ type: "text", text: part }];
+		if (!isRecord(part)) return [];
+		if (part.type === "input_text" && typeof part.text === "string") return [{ type: "text", text: part.text }];
+		if (part.type === "output_text" && typeof part.text === "string") return [{ type: "text", text: part.text }];
+		if (typeof part.text === "string") return [{ ...part, type: typeof part.type === "string" ? part.type : "text", text: part.text }];
+		if (typeof part.input_text === "string") return [{ type: "text", text: part.input_text }];
+		if (typeof part.output_text === "string") return [{ type: "text", text: part.output_text }];
+		if (part.type === "input_image" && typeof part.image_url === "string") {
+			return [{ type: "image_url", image_url: { url: part.image_url } }];
+		}
+		return [part as { type: string; text?: string;[key: string]: unknown }];
+	});
+	return blocks.length > 0 ? blocks : "";
+}
+
+function messagesFromResponsesInput(input: unknown): ChatMessage[] | null {
+	if (typeof input === "string") return [{ role: "user", content: input }];
+	if (!Array.isArray(input)) return null;
+
+	const messages: ChatMessage[] = [];
+	for (const item of input) {
+		if (typeof item === "string") {
+			messages.push({ role: "user", content: item });
+			continue;
+		}
+		if (!isRecord(item)) continue;
+		const role = typeof item.role === "string" ? item.role : "user";
+		if (!["system", "user", "assistant", "model", "tool"].includes(role)) continue;
+		const content = "content" in item ? normalizeContentBlocks(item.content) : extractTextFromUnknownContent(item);
+		messages.push({ role: role as ChatMessage["role"], content });
+	}
+	return messages.length > 0 ? messages : null;
+}
+
+function messagesFromLooseMessages(value: unknown): ChatMessage[] | null {
+	if (typeof value === "string") return [{ role: "user", content: value }];
+	if (isRecord(value)) return messagesFromResponsesInput([value]);
+	return null;
+}
+
+function messagesFromAntigravityRequest(value: Record<string, unknown>): ChatMessage[] | null {
+	const request = isRecord(value.request) ? value.request : null;
+	if (!request || !Array.isArray(request.contents)) return null;
+	const messages: ChatMessage[] = [];
+	if (isRecord(request.systemInstruction) && Array.isArray(request.systemInstruction.parts)) {
+		const systemText = request.systemInstruction.parts
+			.map((part) => isRecord(part) && typeof part.text === "string" ? part.text : "")
+			.filter(Boolean)
+			.join("\n");
+		if (systemText) messages.push({ role: "system", content: systemText });
+	}
+	for (const turn of request.contents) {
+		if (!isRecord(turn) || !Array.isArray(turn.parts)) continue;
+		const role = turn.role === "model" || turn.role === "assistant" ? "assistant" : "user";
+		const content = turn.parts
+			.map((part) => isRecord(part) && typeof part.text === "string" ? part.text : "")
+			.filter(Boolean)
+			.join("\n");
+		messages.push({ role, content });
+	}
+	return messages.length > 0 ? messages : null;
+}
+
+export function normalizeOpenAIChatCompletionRequest(value: unknown): unknown {
+	if (!isRecord(value) || Array.isArray(value.messages)) return value;
+	let messages: ChatMessage[] | null = null;
+	if ("messages" in value) messages = messagesFromLooseMessages(value.messages);
+	else if (typeof value.prompt === "string") messages = [{ role: "user", content: value.prompt }];
+	else if (Array.isArray(value.prompt)) messages = messagesFromResponsesInput(value.prompt) ?? value.prompt.map((prompt) => ({ role: "user", content: String(prompt) }));
+	else if ("input" in value) messages = messagesFromResponsesInput(value.input);
+	else messages = messagesFromAntigravityRequest(value);
+	return messages ? { ...value, messages } : value;
+}
+
+export function normalizeAnthropicMessagesRequest(value: unknown): unknown {
+	if (!isRecord(value) || Array.isArray(value.messages)) return value;
+	const messages = "messages" in value
+		? messagesFromLooseMessages(value.messages)
+		: "input" in value
+		? messagesFromResponsesInput(value.input)
+		: messagesFromAntigravityRequest(value);
+	return messages ? { ...value, messages } : value;
 }
 
 export function validateOpenAIChatCompletionRequest(value: unknown): { ok: true; value: OpenAIChatCompletionRequest } | { ok: false; errors: string[] } {
 	if (!isRecord(value)) return { ok: false, errors: ["body must be a JSON object"] };
 	const errors: string[] = [];
 	if (!isNonEmptyString(value.model)) errors.push("body.model must be a non-empty string");
-	if (!validateMessages(value.messages)) errors.push("body.messages must be an array of chat messages");
+	if (!validateMessages(value.messages)) {
+		compatLogger.warn(`OpenAI messages validation failed: ${JSON.stringify(value.messages)}`);
+		errors.push("body.messages must be an array of chat messages");
+	}
 	if (value.stream !== undefined && typeof value.stream !== "boolean") errors.push("body.stream must be boolean when provided");
 	if (value.temperature !== undefined && typeof value.temperature !== "number") errors.push("body.temperature must be number when provided");
 	if (value.max_tokens !== undefined && typeof value.max_tokens !== "number") errors.push("body.max_tokens must be number when provided");
@@ -496,7 +611,7 @@ export function openAIToAntigravityBody(input: OpenAIChatCompletionRequest): Req
 	const contents: GeminiContent[] = [];
 	for (let i = 0; i < conversationMessages.length; i++) {
 		const msg = conversationMessages[i];
-		if (msg.role === "assistant") {
+		if (msg.role === "assistant" || msg.role === "model") {
 			// Check if this is a thinking model turn with tool calls that have no cached signatures.
 			// If so, we collapse the tool exchange into a neutral user summary instead of
 			// injecting [Tool call: ...] text that the model will learn to mimic.
@@ -652,6 +767,8 @@ export function openAIToAntigravityBody(input: OpenAIChatCompletionRequest): Req
 
 	let mappedModel = input.model;
 	if (mappedModel === "gemini-3.1-pro-high") mappedModel = "gemini-pro-agent";
+	if (mappedModel === "gemini-3.5-flash-high" || mappedModel === "gemini-3.5-flash") mappedModel = "gemini-3-flash-agent";
+	if (mappedModel === "gpt-oss-120b") mappedModel = "gpt-oss-120b-medium";
 
 	return {
 		project: "compat-placeholder",
@@ -686,7 +803,7 @@ export function anthropicToAntigravityBody(input: AnthropicMessagesRequest): Req
 function mapReasoningEffortToThinkingLevel(effort: string | undefined, modelId: string): number | undefined {
 	const lowerModel = modelId.toLowerCase();
 	const isGemini31Pro = /gemini-3\.1-pro/i.test(modelId);
-	const isGemini3Flash = lowerModel.includes("gemini-3-flash");
+	const isGemini3Flash = lowerModel.includes("gemini-3-flash") || lowerModel.includes("gemini-3.5-flash");
 
 	let effectiveEffort = effort;
 	if (!effectiveEffort) {
@@ -896,13 +1013,15 @@ async function streamCompatSse(
 	const created = Math.floor(Date.now() / 1000);
 	const id = format === "openai" ? `chatcmpl-${Date.now().toString(36)}` : `msg_${Date.now().toString(36)}`;
 
+	let anthropicActiveBlockIndex = -1;
+	let anthropicActiveBlockType: "thinking" | "text" | null = null;
+
 	res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no" });
 
 	if (format === "openai") {
 		res.write(`data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }] })}\n\n`);
 	} else if (format === "anthropic") {
 		res.write(`event: message_start\ndata: ${JSON.stringify({ type: "message_start", message: { id, type: "message", role: "assistant", model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 0, output_tokens: 0 } } })}\n\n`);
-		res.write(`event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } })}\n\n`);
 	}
 
 	let tailBuffer = "";
@@ -948,14 +1067,32 @@ async function streamCompatSse(
 									if (format === "openai") {
 										res.write(`data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { reasoning_content: part.text }, finish_reason: null }] })}\n\n`);
 									} else {
-										res.write(`event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: part.text } })}\n\n`);
+										if (anthropicActiveBlockType !== "thinking") {
+											if (anthropicActiveBlockType === "text") {
+												res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: anthropicActiveBlockIndex })}\n\n`);
+											}
+											anthropicActiveBlockIndex = 0;
+											anthropicActiveBlockType = "thinking";
+											res.write(`event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index: anthropicActiveBlockIndex, content_block: { type: "thinking", thinking: "" } })}\n\n`);
+										}
+										res.write(`event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", index: anthropicActiveBlockIndex, delta: { type: "thinking_delta", thinking: part.text } })}\n\n`);
 									}
 								} else {
 									text += part.text;
 									if (format === "openai") {
 										res.write(`data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { content: part.text }, finish_reason: null }] })}\n\n`);
 									} else {
-										res.write(`event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: part.text } })}\n\n`);
+										if (anthropicActiveBlockType !== "text") {
+											if (anthropicActiveBlockType === "thinking") {
+												res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: anthropicActiveBlockIndex })}\n\n`);
+												anthropicActiveBlockIndex = 1;
+											} else {
+												anthropicActiveBlockIndex = 0;
+											}
+											anthropicActiveBlockType = "text";
+											res.write(`event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index: anthropicActiveBlockIndex, content_block: { type: "text", text: "" } })}\n\n`);
+										}
+										res.write(`event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", index: anthropicActiveBlockIndex, delta: { type: "text_delta", text: part.text } })}\n\n`);
 									}
 								}
 							} else if (isRecord(part.functionCall)) {
@@ -998,7 +1135,9 @@ async function streamCompatSse(
 			}
 			res.write("data: [DONE]\n\n");
 		} else {
-			res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: 0 })}\n\n`);
+			if (anthropicActiveBlockType !== null) {
+				res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: anthropicActiveBlockIndex })}\n\n`);
+			}
 			// message_delta carries output_tokens; also include input_tokens so Hermes shows full context count
 			res.write(`event: message_delta\ndata: ${JSON.stringify({ type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { input_tokens: inputTokens, output_tokens: outputTokens } })}\n\n`);
 			res.write(`event: message_stop\ndata: ${JSON.stringify({ type: "message_stop" })}\n\n`);
@@ -1053,11 +1192,14 @@ async function completeViaRotator(
 
 export function serveOpenAIModels(res: ServerResponse): void {
 	const models = [
+		{ id: "gemini-3.5-flash-low", ctx: 1048576 },
+		{ id: "gemini-3.5-flash-high", ctx: 1048576 },
 		{ id: "gemini-3-flash", ctx: 1048576 },
 		{ id: "gemini-3.1-pro-low", ctx: 1048576 },
 		{ id: "gemini-3.1-pro-high", ctx: 1048576 },
 		{ id: "claude-sonnet-4-6", ctx: 500000 },
 		{ id: "claude-opus-4-6-thinking", ctx: 500000 },
+		{ id: "gpt-oss-120b-medium", ctx: 131072 },
 	];
 	writeJson(res, 200, {
 		object: "list",
@@ -1083,7 +1225,7 @@ export async function handleOpenAIChatCompletions(req: IncomingMessage, res: Ser
 		if (err instanceof PayloadTooLargeError) return writeJson(res, 413, { error: { message: "Payload too large", type: "invalid_request_error" } });
 		return writeJson(res, 400, { error: { message: "Invalid JSON body", type: "invalid_request_error" } });
 	}
-	const validation = validateOpenAIChatCompletionRequest(parsed);
+	const validation = validateOpenAIChatCompletionRequest(normalizeOpenAIChatCompletionRequest(parsed));
 	if (!validation.ok) return writeJson(res, 400, { error: { message: validation.errors.join("; "), type: "invalid_request_error" } });
 
 	const started = Date.now();
@@ -1107,9 +1249,14 @@ export async function handleOpenAIChatCompletions(req: IncomingMessage, res: Ser
 		model: validation.value.model,
 		choices: [{
 			index: 0,
-			message: hasToolCalls
-				? { role: "assistant", content: null, tool_calls: result.completion.toolCalls }
-				: { role: "assistant", content: result.completion.text },
+			message: {
+				role: "assistant",
+				...(hasToolCalls
+					? { content: null, tool_calls: result.completion.toolCalls }
+					: { content: result.completion.text }
+				),
+				...(result.completion.thinkingText ? { reasoning_content: result.completion.thinkingText } : {})
+			},
 			finish_reason: hasToolCalls ? "tool_calls" : "stop",
 		}],
 		usage: {
@@ -1128,7 +1275,7 @@ export async function handleAnthropicMessages(req: IncomingMessage, res: ServerR
 		if (err instanceof PayloadTooLargeError) return writeJson(res, 413, { type: "error", error: { type: "invalid_request_error", message: "Payload too large" } });
 		return writeJson(res, 400, { type: "error", error: { type: "invalid_request_error", message: "Invalid JSON body" } });
 	}
-	const validation = validateAnthropicMessagesRequest(parsed);
+	const validation = validateAnthropicMessagesRequest(normalizeAnthropicMessagesRequest(parsed));
 	if (!validation.ok) return writeJson(res, 400, { type: "error", error: { type: "invalid_request_error", message: validation.errors.join("; ") } });
 
 	const started = Date.now();
@@ -1149,7 +1296,12 @@ export async function handleAnthropicMessages(req: IncomingMessage, res: ServerR
 		type: "message",
 		role: "assistant",
 		model: validation.value.model,
-		content: [{ type: "text", text: result.completion.text }],
+		content: result.completion.thinkingText
+			? [
+				{ type: "thinking", thinking: result.completion.thinkingText },
+				{ type: "text", text: result.completion.text }
+			]
+			: [{ type: "text", text: result.completion.text }],
 		stop_reason: "end_turn",
 		stop_sequence: null,
 		usage: {

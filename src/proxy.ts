@@ -286,6 +286,14 @@ export async function forwardRequest(
 ): Promise<ForwardedResponse> {
 	// Swap credentials
 	body.project = account.config.projectId;
+
+	// Map internal display/compat names to Google upstream names
+	let targetModel = body.model;
+	if (targetModel === "gemini-3.1-pro-high") targetModel = "gemini-pro-agent";
+	if (targetModel === "gemini-3.5-flash-high" || targetModel === "gemini-3.5-flash") targetModel = "gemini-3-flash-agent";
+	if (targetModel === "gpt-oss-120b") targetModel = "gpt-oss-120b-medium";
+	body.model = targetModel;
+
 	const { displayModel, ...bodyToForward } = body;
 	const requestBody = JSON.stringify(bodyToForward);
 

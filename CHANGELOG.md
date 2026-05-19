@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+## [1.14.0] - 2026-05-19
+
+### Added
+- **Gemini 3.5 Flash Support**: Added routing and dashboard support for the new `gemini-3.5-flash` model family (including `gemini-3.5-flash-low` / `gemini-3.5-flash-medium` and `gemini-3-flash-agent` / `gemini-3.5-flash-high`).
+- **GPT-OSS 120B Support**: Added complete support (pricing, styling, and dashboard visualization) for the `gpt-oss-120b-medium` model, mapping its quota tracking to the shared Claude pool (`claude-opus-4-6-thinking`).
+- **Model Role Support**: Added support for the `"model"` role in compatibility layer chat completions, validating and mapping it to native Gemini model turns.
+- **Request Normalization**: Added normalization helpers (`normalizeOpenAIChatCompletionRequest` / `normalizeAnthropicMessagesRequest`) to automatically format loose inputs, Responses-style inputs (e.g., `input`, `prompt`), and raw native Antigravity request payloads into standard OpenAI/Anthropic messages format.
+
 ## [1.13.0] - 2026-05-19
 
 ### Removed

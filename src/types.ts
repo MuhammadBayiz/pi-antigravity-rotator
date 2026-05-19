@@ -79,14 +79,14 @@ export const QUOTA_MODEL_KEYS: Record<string, { key: string; altKeys: string[]; 
 		altKeys: ["gemini-3.1-pro-high", "gemini-3.1-pro-low", "gemini-3-pro-high", "gemini-3-pro-low"],
 		display: "G3Pro",
 	},
-	"gemini-3-flash": {
-		key: "gemini-3-flash",
-		altKeys: [],
-		display: "G3Flash",
+	"gemini-3.5-flash": {
+		key: "gemini-3.5-flash",
+		altKeys: ["gemini-3.5-flash-low", "gemini-3.5-flash-medium", "gemini-3.5-flash-high", "gemini-3-flash-agent", "gemini-3-flash"],
+		display: "G3.5Flash",
 	},
 	claude: {
 		key: "claude-opus-4-6-thinking",
-		altKeys: ["claude-opus-4-5-thinking", "claude-opus-4-5", "claude-sonnet-4-6-thinking", "claude-sonnet-4-6", "claude-sonnet-4-5-thinking", "claude-sonnet-4-5"],
+		altKeys: ["claude-opus-4-5-thinking", "claude-opus-4-5", "claude-sonnet-4-6-thinking", "claude-sonnet-4-6", "claude-sonnet-4-5-thinking", "claude-sonnet-4-5", "gpt-oss-120b-medium", "gpt-oss-120b"],
 		display: "Claude",
 	},
 };
@@ -94,14 +94,19 @@ export const QUOTA_MODEL_KEYS: Record<string, { key: string; altKeys: string[]; 
 // Map request model names to quota model keys
 export function resolveQuotaModelKey(requestModel: string): string | null {
 	const lower = requestModel.toLowerCase();
+	// Explicit mappings to avoid substring collisions
+	if (lower.includes("gemini-3-flash-agent")) return "gemini-3.5-flash";
+	if (lower.includes("gpt-oss")) return "claude-opus-4-6-thinking";
+
 	for (const [, config] of Object.entries(QUOTA_MODEL_KEYS)) {
 		if (lower.includes(config.key) || config.altKeys.some((alt) => lower.includes(alt))) {
 			return config.key;
 		}
 	}
 	// Broad fallback matching
+	if (lower.includes("gemini") && lower.includes("3.5") && lower.includes("flash")) return "gemini-3.5-flash";
 	if (lower.includes("gemini") && lower.includes("pro")) return "gemini-3.1-pro";
-	if (lower.includes("gemini") && lower.includes("flash")) return "gemini-3-flash";
+	if (lower.includes("gemini") && lower.includes("flash")) return "gemini-3.5-flash";
 	if (lower.includes("claude")) return "claude-opus-4-6-thinking";
 	return null;
 }
@@ -114,6 +119,10 @@ export function resolveQuotaModelKey(requestModel: string): string | null {
  */
 export function resolveDisplayModelKey(requestModel: string): string {
 	const lower = requestModel.toLowerCase();
+	// Explicit agent and gpt-oss overrides
+	if (lower.includes("gemini-3-flash-agent")) return "gemini-3.5-flash-high";
+	if (lower.includes("gpt-oss-120b")) return "gpt-oss-120b-medium";
+
 	// Claude — distinguish sonnet vs opus
 	if (lower.includes("claude")) {
 		if (lower.includes("sonnet")) return "claude-sonnet-4-6";
@@ -125,6 +134,12 @@ export function resolveDisplayModelKey(requestModel: string): string {
 		if (lower.includes("-low")) return "gemini-3.1-pro-low";
 		if (lower.includes("-high")) return "gemini-3.1-pro-high";
 		return "gemini-3.1-pro"; // unspecified variant
+	}
+	// Gemini 3.5 Flash — distinguish low vs high
+	if (lower.includes("gemini") && lower.includes("3.5") && lower.includes("flash")) {
+		if (lower.includes("-low") || lower.includes("-medium")) return "gemini-3.5-flash-low";
+		if (lower.includes("-high")) return "gemini-3.5-flash-high";
+		return "gemini-3.5-flash"; // unspecified variant
 	}
 	// Flash
 	if (lower.includes("gemini") && lower.includes("flash")) return "gemini-3-flash";
@@ -342,6 +357,10 @@ export const MODEL_PRICING: Record<string, { inputPer1M: number; outputPer1M: nu
 	"gemini-3.1-pro-low":       { inputPer1M: 2.00,  outputPer1M: 12.00 },
 	"gemini-3.1-pro-high":      { inputPer1M: 2.00,  outputPer1M: 12.00 },
 	"gemini-3-flash":           { inputPer1M: 0.50,  outputPer1M: 3.00 },
+	"gemini-3.5-flash":         { inputPer1M: 0.50,  outputPer1M: 3.00 },
+	"gemini-3.5-flash-low":     { inputPer1M: 0.50,  outputPer1M: 3.00 },
+	"gemini-3.5-flash-high":    { inputPer1M: 0.50,  outputPer1M: 3.00 },
+	"gpt-oss-120b-medium":      { inputPer1M: 2.00,  outputPer1M: 10.00 },
 };
 
 // Antigravity OAuth constants (same as pi-mono)

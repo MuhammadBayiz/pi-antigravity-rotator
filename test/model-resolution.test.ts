@@ -15,8 +15,15 @@ describe("model resolution", () => {
 	});
 
 	it("maps Flash requests to the Flash quota pool", () => {
-		assert.equal(resolveQuotaModelKey("gemini-3-flash"), "gemini-3-flash");
-		assert.equal(resolveQuotaModelKey("google/gemini-flash-latest"), "gemini-3-flash");
+		assert.equal(resolveQuotaModelKey("gemini-3-flash"), "gemini-3.5-flash");
+		assert.equal(resolveQuotaModelKey("google/gemini-flash-latest"), "gemini-3.5-flash");
+		assert.equal(resolveQuotaModelKey("gemini-3-flash-agent"), "gemini-3.5-flash");
+		assert.equal(resolveQuotaModelKey("gemini-3.5-flash-medium"), "gemini-3.5-flash");
+	});
+
+	it("maps GPT-OSS requests to the Claude quota pool", () => {
+		assert.equal(resolveQuotaModelKey("gpt-oss-120b-medium"), "claude-opus-4-6-thinking");
+		assert.equal(resolveQuotaModelKey("gpt-oss-120b"), "claude-opus-4-6-thinking");
 	});
 
 	it("maps Claude variants to the Claude quota pool", () => {
@@ -34,6 +41,9 @@ describe("model resolution", () => {
 		assert.equal(resolveDisplayModelKey("gemini-3.1-pro-high"), "gemini-3.1-pro-high");
 		assert.equal(resolveDisplayModelKey("claude-sonnet-4-6"), "claude-sonnet-4-6");
 		assert.equal(resolveDisplayModelKey("claude-opus-4-6-thinking"), "claude-opus-4-6-thinking");
+		assert.equal(resolveDisplayModelKey("gemini-3-flash-agent"), "gemini-3.5-flash-high");
+		assert.equal(resolveDisplayModelKey("gemini-3.5-flash-medium"), "gemini-3.5-flash-low");
+		assert.equal(resolveDisplayModelKey("gpt-oss-120b-medium"), "gpt-oss-120b-medium");
 	});
 
 	it("has pricing entries for every known display family", () => {
@@ -43,6 +53,7 @@ describe("model resolution", () => {
 		assert.ok(MODEL_PRICING["gemini-3-flash"]);
 		assert.ok(MODEL_PRICING["claude-opus-4-6-thinking"]);
 		assert.ok(MODEL_PRICING["claude-sonnet-4-6"]);
+		assert.ok(MODEL_PRICING["gpt-oss-120b-medium"]);
 	});
 
 	it("keeps quota model keys unique", () => {

@@ -64,7 +64,6 @@ function createAccount(): AccountRuntime {
 		inFlightRequests: 0,
 		inFlightByModel: {},
 		allowFreshWindowStartsOverride: false,
-		quotaWindows: {},
 		dailyRequestCount: 0,
 		dailyRequestDay: "2026-05-16",
 	};
@@ -93,6 +92,7 @@ function createRotatorStub(account: AccountRuntime): AccountRotator {
 		markError: () => {},
 		recordRequest: () => false,
 		recordProxyEvent: () => {},
+		getGlobalDelayMs: () => 0,
 	} as unknown as AccountRotator;
 }
 
@@ -123,7 +123,7 @@ describe("proxy compat integration", () => {
 		endpointOverrides.splice(0, endpointOverrides.length, daily.url, prod.url);
 
 		const body = openAIToAntigravityBody({
-			model: "gemini-3-flash",
+			model: "claude-sonnet-4-6",
 			messages: [
 				{ role: "system", content: "be terse" },
 				{ role: "user", content: "ping" },

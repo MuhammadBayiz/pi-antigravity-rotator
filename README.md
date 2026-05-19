@@ -74,7 +74,7 @@ This package is not exclusive to Pi. It can be consumed by **any** agent or fron
 2. Add a new generic/OpenAI-compatible provider
 3. Set the API Base URL to: `http://127.0.0.1:51200/v1/`
 4. Set the API Key to: `antigravity` (or any string, the proxy doesn't validate it)
-5. You can now use any of the models (e.g. `gemini-3-flash`, `gemini-3.1-pro-low`, `claude-sonnet-4-6`, `claude-opus-4-6-thinking`) directly in your agent.
+5. You can now use any of the models (e.g. `gemini-3.5-flash-low`, `gemini-3.5-flash-high`, `gemini-3.1-pro-low`, `claude-sonnet-4-6`, `claude-opus-4-6-thinking`, `gpt-oss-120b-medium`) directly in your agent.
 
 ### Activation rule
 
@@ -353,7 +353,9 @@ curl http://localhost:51200/v1/messages \
 Current adapter scope:
 
 - Text chat/messages.
-- **Native Reasoning visibility**: Models with thinking capabilities (Gemini 3 Pro, Gemini 3 Flash, Claude Sonnet 4.6 Thinking) automatically expose their interleaved thinking blocks in real-time as OpenAI `reasoning_content` or Anthropic `thinking_delta` chunks.
+- **Model Role Support**: Fully supports the `"model"` role in chat message histories (e.g., from Pi or Hermes agents), validating and routing it identically to the `"assistant"` role.
+- **Request Normalization**: Automatically normalizes loose inputs (non-array messages), legacy prompt/input fields (e.g. `prompt` strings/arrays or `input` structures), and raw native Antigravity requests (`request.contents`) into standard OpenAI/Anthropic format.
+- **Native Reasoning visibility**: Models with thinking capabilities (Gemini 3 Pro, Gemini 3.5 Flash, Claude Sonnet 4.6 Thinking) automatically expose their interleaved thinking blocks in real-time as OpenAI `reasoning_content` or Anthropic `thinking_delta` chunks.
 - Streaming mode is supported as compatibility SSE. The adapter buffers the upstream Antigravity stream, then emits one OpenAI/Anthropic-compatible final delta. Native token-by-token pass-through is not implemented yet.
 - Image input is supported when sent as base64 data URL (`OpenAI image_url.url = data:image/...;base64,...`) or Anthropic base64 source (`type=image`, `source.type=base64`).
 - **Tool/function calling is fully supported** (OpenAI `tools`/`tool_choice` format and Anthropic `tool_use`/`tool_result` via standard translation to Gemini `functionDeclarations`).

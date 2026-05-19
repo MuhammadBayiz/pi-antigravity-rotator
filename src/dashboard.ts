@@ -1934,7 +1934,11 @@ var TOKEN_MODEL_COLORS = {
   'gemini-3.1-pro-high': '#3b82f6',      // Azul
   'gemini-3.1-pro-low': '#38bdf8',       // Celeste
   'gemini-3-flash': '#4ade80',           // Verde
+  'gemini-3.5-flash-low': '#a3e635',     // Lime
+  'gemini-3.5-flash-high': '#84cc16',    // Darker Lime
+  'gemini-3.5-flash': '#84cc16',
   'gemini-3.1-pro': '#fb923c',           // Fallback genérico
+  'gpt-oss-120b-medium': '#a855f7',      // Purpura
   '__other__': '#6b7280'
 };
 
@@ -1956,6 +1960,10 @@ var MODEL_PRICING_CLIENT = {
   'gemini-3.1-pro-low':       { input: 2.00,  output: 12.00 },
   'gemini-3.1-pro-high':      { input: 2.00,  output: 12.00 },
   'gemini-3-flash':           { input: 0.50,  output: 3.00  },
+  'gemini-3.5-flash':         { input: 0.50,  output: 3.00  },
+  'gemini-3.5-flash-low':     { input: 0.50,  output: 3.00  },
+  'gemini-3.5-flash-high':    { input: 0.50,  output: 3.00  },
+  'gpt-oss-120b-medium':      { input: 2.00,  output: 10.00 },
 };
 
 function calcSavingsFromBuckets(buckets) {
@@ -2391,6 +2399,8 @@ function renderForecastPanel(data) {
   Object.keys(burnByModel).forEach(function(displayKey) {
     var poolKey = displayKey;
     if (displayKey.startsWith('gemini-3.1-pro')) poolKey = 'gemini-3.1-pro';
+    if (displayKey.startsWith('gemini-3.5-flash') || displayKey === 'gemini-3-flash') poolKey = 'gemini-3.5-flash';
+    if (displayKey.startsWith('gpt-oss')) poolKey = 'gpt-oss-120b-medium';
     if (displayKey === 'claude-sonnet-4-6') poolKey = 'claude-opus-4-6-thinking';
     if (!burnByPool[poolKey]) burnByPool[poolKey] = 0;
     burnByPool[poolKey] += burnByModel[displayKey];
@@ -2422,6 +2432,7 @@ function renderForecastPanel(data) {
     var displayName = m;
     if (m === 'claude-opus-4-6-thinking') displayName = 'claude';
     if (m === 'gemini-3.1-pro') displayName = 'gemini-3.1-pro';
+    if (m === 'gemini-3.5-flash') displayName = 'gemini-3.5-flash';
 
     var minResetRemaining = null;
     q.entries.forEach(function(entry) {

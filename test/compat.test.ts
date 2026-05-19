@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
 	anthropicToAntigravityBody,
+	normalizeAnthropicMessagesRequest,
+	normalizeOpenAIChatCompletionRequest,
 	openAIToAntigravityBody,
 	parseAntigravitySse,
 	validateAnthropicMessagesRequest,
@@ -24,6 +26,38 @@ describe("compat adapters", () => {
 		if (!result.ok) assert.match(result.errors.join("; "), /model/);
 	});
 
+	it("normalizes OpenAI Responses-style input into chat messages", () => {
+		const normalized = normalizeOpenAIChatCompletionRequest({
+			model: "gemini-3.5-flash",
+			input: [{ role: "user", content: [{ type: "input_text", text: "ping" }] }],
+		});
+		const result = validateOpenAIChatCompletionRequest(normalized);
+		assert.equal(result.ok, true);
+		if (result.ok) assert.deepEqual(result.value.messages, [{ role: "user", content: [{ type: "text", text: "ping" }] }]);
+	});
+
+	it("normalizes native Antigravity contents into OpenAI chat messages", () => {
+		const normalized = normalizeOpenAIChatCompletionRequest({
+			model: "gemini-3-flash",
+			request: {
+				contents: [{ role: "user", parts: [{ text: "hola" }] }],
+			},
+		});
+		const result = validateOpenAIChatCompletionRequest(normalized);
+		assert.equal(result.ok, true);
+		if (result.ok) assert.deepEqual(result.value.messages, [{ role: "user", content: "hola" }]);
+	});
+
+	it("normalizes loose non-array messages into OpenAI chat messages", () => {
+		const normalized = normalizeOpenAIChatCompletionRequest({
+			model: "gemini-3.5-flash-high",
+			messages: { role: "user", content: [{ type: "input_text", text: "hola" }] },
+		});
+		const result = validateOpenAIChatCompletionRequest(normalized);
+		assert.equal(result.ok, true);
+		if (result.ok) assert.deepEqual(result.value.messages, [{ role: "user", content: [{ type: "text", text: "hola" }] }]);
+	});
+
 	it("converts OpenAI messages into Antigravity request body", () => {
 		const body = openAIToAntigravityBody({
 			model: "claude-sonnet-4-6",
@@ -37,7 +71,7 @@ describe("compat adapters", () => {
 		assert.match(bodyStr, /"project":"compat-placeholder"/);
 		assert.match(bodyStr, /"userAgent":"antigravity"/);
 		assert.match(bodyStr, /"requestType":"agent"/);
-		assert.match(bodyStr, /"systemInstruction":{"role":"user","parts":\[{"text":"be terse"}\]}/);
+		assert.match(bodyStr, /"systemInstruction":{"role":"system","parts":\[{"text":"be terse"}\]}/);
 		const reqStr = JSON.stringify(body.request);
 		assert.match(reqStr, /"contents":\[{"role":"user","parts":\[{"text":"ping"}\]}\]/);
 	});
@@ -52,17 +86,35 @@ describe("compat adapters", () => {
 		assert.equal(result.ok, true);
 	});
 
+	it("normalizes native Antigravity contents into Anthropic messages", () => {
+		const normalized = normalizeAnthropicMessagesRequest({
+			model: "claude-opus-4-6-thinking",
+			request: {
+				systemInstruction: { role: "system", parts: [{ text: "be terse" }] },
+				contents: [{ role: "user", parts: [{ text: "hello" }] }],
+			},
+		});
+		const result = validateAnthropicMessagesRequest(normalized);
+		assert.equal(result.ok, true);
+		if (result.ok) {
+			assert.deepEqual(result.value.messages, [
+				{ role: "system", content: "be terse" },
+				{ role: "user", content: "hello" },
+			]);
+		}
+	});
+
 	it("converts Anthropic messages into Antigravity request body", () => {
 		const body = anthropicToAntigravityBody({
-			model: "gemini-3-flash",
+			model: "claude-sonnet-4-6",
 			system: "policy",
 			messages: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
 		});
-		assert.equal(body.model, "gemini-3-flash");
+		assert.equal(body.model, "claude-sonnet-4-6");
 		const bodyStr = JSON.stringify(body);
-		assert.match(bodyStr, /"model":"gemini-3-flash"/);
+		assert.match(bodyStr, /"model":"claude-sonnet-4-6"/);
 		assert.match(bodyStr, /"userAgent":"antigravity"/);
-		assert.match(bodyStr, /"systemInstruction":{"role":"user","parts":\[{"text":"policy"}\]}/);
+		assert.match(bodyStr, /"systemInstruction":{"role":"system","parts":\[{"text":"policy"}\]}/);
 		const reqStr = JSON.stringify(body.request);
 		assert.match(reqStr, /"contents":\[{"role":"user","parts":\[{"text":"hello"}\]}\]/);
 	});
@@ -109,5 +161,26 @@ describe("compat adapters", () => {
 		assert.equal(parsed.inputTokens, 3);
 		assert.equal(parsed.outputTokens, 2);
 		assert.equal(parsed.responseId, "abc");
+	});
+
+	it("accepts model role in messages", () => {
+		const result = validateOpenAIChatCompletionRequest({
+			model: "gemini-3-flash",
+			messages: [{ role: "model", content: "hello" }],
+			stream: false,
+		});
+		assert.equal(result.ok, true);
+	});
+
+	it("converts model role to model in Antigravity request body", () => {
+		const body = openAIToAntigravityBody({
+			model: "gemini-3-flash",
+			messages: [
+				{ role: "user", content: "hello" },
+				{ role: "model", content: "hi there" },
+			],
+		});
+		const reqStr = JSON.stringify(body.request);
+		assert.match(reqStr, /"contents":\[{"role":"user","parts":\[{"text":"hello"}\]},{"role":"model","parts":\[{"text":"hi there"}\]}\]/);
 	});
 });
