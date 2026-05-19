@@ -10,9 +10,6 @@ import {
 	type ModelQuota,
 	type ModelRotationState,
 	type PersistedState,
-	type QuotaWindowHistory,
-	type DualWindowTracker,
-	type ProAdvisorAction,
 	type StatusResponse,
 	type TokenBucket,
 	type TokenUsageData,
@@ -97,7 +94,6 @@ export class AccountRotator {
 			inFlightRequests: 0,
 			inFlightByModel: {},
 			allowFreshWindowStartsOverride: false,
-			quotaWindows: {},
 			dailyRequestCount: 0,
 			dailyRequestDay: currentUtcDay(),
 		}));
@@ -148,7 +144,6 @@ export class AccountRotator {
 					account.disabled = saved.disabled;
 					account.flagged = saved.flagged ?? false;
 				account.allowFreshWindowStartsOverride = saved.allowFreshWindowStartsOverride ?? false;
-					account.quotaWindows = saved.quotaWindows ?? {};
 				}
 			}
 			// Cap any stale cooldowns to 30 min max from now
@@ -230,7 +225,6 @@ export class AccountRotator {
 				disabled: account.disabled,
 				flagged: account.flagged,
 				allowFreshWindowStartsOverride: account.allowFreshWindowStartsOverride,
-					quotaWindows: account.quotaWindows,
 			};
 		}
 			try {
@@ -376,77 +370,6 @@ export class AccountRotator {
 			this.log(`RAW POLL ${account.config.email} -> ${rawLog}`);
 			// ---------------------------------------
 
-			// Record dual-window quota tracking per model (Immutable Anchors Architecture)
-			const now = Date.now();
-			const FIVE_HOURS_10MIN = (5 * 60 + 10) * 60 * 1000;
-			const FIVE_MIN = 5 * 60 * 1000;
-
-			// Step 1: Initialize tracking and check for the definitive PRO signal (genuine 5h timer)
-			let accountIsDefinitivelyPro = false;
-			for (const q of account.quota) {
-				if (!account.quotaWindows[q.modelKey]) {
-					account.quotaWindows[q.modelKey] = {
-						pro: { lastSeen: 0, resetTimeMs: 0, resetTime: null, lastQuota: -1 },
-						free: { lastSeen: 0, resetTimeMs: 0, resetTime: null, lastQuota: -1 },
-					};
-				}
-				if (q.timerType === "5h") {
-					const currentResetMs = q.resetTime ? new Date(q.resetTime).getTime() : 0;
-					if (currentResetMs === 0 || (currentResetMs - now) <= FIVE_HOURS_10MIN) {
-						accountIsDefinitivelyPro = true;
-					}
-				}
-			}
-
-			// Step 2: Update permanent anchors based on the definitive signal
-			for (const q of account.quota) {
-				if (q.timerType === "fresh") continue; // Fresh gives us no reset time to anchor
-				const tracker = account.quotaWindows[q.modelKey];
-				const currentResetMs = q.resetTime ? new Date(q.resetTime).getTime() : 0;
-				if (currentResetMs === 0) continue;
-
-				// Has the real-world time passed the existing Pro anchor?
-				if (tracker.pro.resetTimeMs > 0 && now > tracker.pro.resetTimeMs) {
-					// The old Pro anchor expired naturally. We clear it to make room for a new cycle.
-					tracker.pro.resetTimeMs = 0;
-					tracker.pro.resetTime = null;
-				}
-				// Has the real-world time passed the existing Free anchor?
-				if (tracker.free.resetTimeMs > 0 && now > tracker.free.resetTimeMs) {
-					// The old Free anchor expired naturally. We clear it to make room for a new cycle.
-					tracker.free.resetTimeMs = 0;
-					tracker.free.resetTime = null;
-				}
-
-				const matchesPro = tracker.pro.resetTimeMs > 0 && Math.abs(currentResetMs - tracker.pro.resetTimeMs) < FIVE_MIN;
-				const matchesFree = tracker.free.resetTimeMs > 0 && Math.abs(currentResetMs - tracker.free.resetTimeMs) < FIVE_MIN;
-
-				if (matchesPro) {
-					// It's the Pro window. Update quota.
-					tracker.pro.lastSeen = now;
-					tracker.pro.lastQuota = q.percentRemaining;
-				} else if (matchesFree) {
-					// It's the Free window. Update quota.
-					tracker.free.lastSeen = now;
-					tracker.free.lastQuota = q.percentRemaining;
-				} else {
-					// This is a BRAND NEW reset time (doesn't match either anchor).
-					// We must assign it to either the Pro bucket or the Free bucket.
-					if (accountIsDefinitivelyPro) {
-						// We have absolute proof the account is Pro right now.
-						tracker.pro.lastSeen = now;
-						tracker.pro.resetTimeMs = currentResetMs;
-						tracker.pro.resetTime = q.resetTime;
-						tracker.pro.lastQuota = q.percentRemaining;
-					} else {
-						// We have NO proof the account is Pro. Assume Free.
-						tracker.free.lastSeen = now;
-						tracker.free.resetTimeMs = currentResetMs;
-						tracker.free.resetTime = q.resetTime;
-						tracker.free.lastQuota = q.percentRemaining;
-					}
-				}
-			}
 		} catch {
 			// Network error, skip
 		}
@@ -1468,9 +1391,7 @@ export class AccountRotator {
 					quota: a.quota,
 					inFlightRequests: a.inFlightRequests,
 					inFlightByModel: a.inFlightByModel,
-					proDetected: this.isProAccount(a),
-					quotaWindows: a.quotaWindows,
-				familyManager: !!a.config.familyManager,
+					proDetected: a.config.type === "pro",
 				allowFreshWindowStartsOverride: a.allowFreshWindowStartsOverride,
 				effectiveFreshWindowStartsAllowed: this.isEffectiveFreshWindowAllowed(a),
 			};
@@ -1513,7 +1434,6 @@ export class AccountRotator {
 			},
 			routingHealth,
 			accounts,
-			proAdvisor: this.getProAdvisor(),
 			recentEvents: [...this.recentEvents],
 			requestLog: this.requestLog.slice(0, 100),
 			tokenUsage: this.getTokenUsage(),
@@ -1556,7 +1476,7 @@ export class AccountRotator {
 		).length;
 
 		return {
-			wasProAccount: this.isProAccount(account),
+			wasProAccount: account.config.type === "pro",
 			accountQuotaPercent: quota,
 			timerType,
 			poolSize: this.accounts.length,
@@ -1599,7 +1519,6 @@ export class AccountRotator {
 					inFlightRequests: 0,
 					inFlightByModel: {},
 				allowFreshWindowStartsOverride: false,
-					quotaWindows: {},
 				dailyRequestCount: 0,
 				dailyRequestDay: currentUtcDay(),
 			};
@@ -1640,153 +1559,6 @@ export class AccountRotator {
 
 	public getAccountByEmail(email: string): AccountRuntime | undefined {
 		return this.accounts.find((a) => a.config.email === email);
-	}
-
-	// =========================================================================
-	// Pro Family Sharing Advisor
-	// =========================================================================
-
-	// Model keys relevant for Pro advisor decisions (ignore Flash)
-	private static PRO_ADVISOR_MODELS = ["gemini-3.1-pro", "claude-opus-4-6-thinking"];
-
-	/**
-	 * Check if a model's current 7d timer is the Pro cooldown (not Free).
-	 * Uses the dual-window tracker: compares current resetTime against recorded Pro resetTime.
-	 */
-	private isProOriginatedTimer(account: AccountRuntime, modelKey: string): boolean {
-		const tracker = account.quotaWindows[modelKey];
-		if (!tracker || tracker.pro.lastSeen === 0) return false;
-		
-		const currentQuota = account.quota.find(
-			(q) => q.modelKey.includes(modelKey) || modelKey.includes(q.modelKey),
-		);
-		if (!currentQuota || currentQuota.timerType !== "7d") return false;
-		
-		const currentResetMs = currentQuota.resetTime ? new Date(currentQuota.resetTime).getTime() : 0;
-		if (tracker.pro.resetTimeMs === 0 || currentResetMs === 0) return false;
-
-		// Tight 5-min tolerance against permanent anchor
-		return Math.abs(currentResetMs - tracker.pro.resetTimeMs) < 300000;
-	}
-
-	/**
-	 * An account is currently considered "Pro" if, during the very last quota poll,
-	 * its advisor models were tracked in the PRO bucket of the dual-window tracker.
-	 */
-	private isProAccount(account: AccountRuntime): boolean {
-		if (account.lastQuotaPoll === 0) return false;
-		
-		for (const m of AccountRotator.PRO_ADVISOR_MODELS) {
-			const tracker = account.quotaWindows[m];
-			if (!tracker) continue;
-			// If the Pro window was updated exactly during the last poll, it's Pro.
-			// Give a tiny 1s margin for JS execution timing.
-			if (tracker.pro.lastSeen > 0 && Math.abs(tracker.pro.lastSeen - account.lastQuotaPoll) < 1000) {
-				return true;
-			}
-		}
-		return false;
-	}
-
-	/**
-	 * Get the "other" window's quota info for an account/model.
-	 * If currently showing Pro timer → returns Free window data (and vice versa).
-	 */
-	private getAlternateWindow(account: AccountRuntime, modelKey: string): { type: "pro" | "free"; quota: number; resetTimeMs: number; resetTime: string | null } | null {
-		const tracker = account.quotaWindows[modelKey];
-		if (!tracker) return null;
-		const currentQuota = account.quota.find(
-			(q) => q.modelKey.includes(modelKey) || modelKey.includes(q.modelKey),
-		);
-		if (!currentQuota) return null;
-
-		if (this.isProOriginatedTimer(account, modelKey) || currentQuota.timerType === "5h") {
-			// Currently on Pro — return Free window
-			if (tracker.free.lastSeen === 0) return null;
-			return { type: "free", quota: tracker.free.lastQuota, resetTimeMs: tracker.free.resetTimeMs, resetTime: tracker.free.resetTime };
-		} else {
-			// Currently on Free — return Pro window
-			if (tracker.pro.lastSeen === 0) return null;
-			return { type: "pro", quota: tracker.pro.lastQuota, resetTimeMs: tracker.pro.resetTimeMs, resetTime: tracker.pro.resetTime };
-		}
-	}
-
-	private getProAdvisor(): StatusResponse["proAdvisor"] {
-		const maxSlots = this.config.proSlots ?? 6;
-		const proAccounts = this.accounts.filter((a) => !a.disabled && !a.flagged && this.isProAccount(a));
-		const currentProCount = proAccounts.length;
-		const actions: ProAdvisorAction[] = [];
-
-		// Comparative Quota Analysis Logic (Cumulative Score)
-		for (const account of this.accounts) {
-			if (account.disabled || account.flagged) continue;
-
-			let totalProScore = 0;
-			let totalFreeScore = 0;
-			let hasAnyProData = false;
-			let hasAnyFreeData = false;
-
-			for (const modelKey of AccountRotator.PRO_ADVISOR_MODELS) {
-				const tracker = account.quotaWindows[modelKey];
-				if (!tracker) continue;
-				if (tracker.pro.lastSeen > 0) {
-					totalProScore += Math.max(0, tracker.pro.lastQuota);
-					hasAnyProData = true;
-				}
-				if (tracker.free.lastSeen > 0) {
-					totalFreeScore += Math.max(0, tracker.free.lastQuota);
-					hasAnyFreeData = true;
-				}
-			}
-
-			// If a tier has no data at all, its score is effectively 0
-			const effectivePro = hasAnyProData ? totalProScore : 0;
-			const effectiveFree = hasAnyFreeData ? totalFreeScore : 0;
-
-			const isCurrentlyPro = this.isProAccount(account);
-
-			if (isCurrentlyPro) {
-				// Account is currently in PRO tier
-				if (account.config.familyManager) continue; // Never remove FM
-
-				if (effectiveFree > effectivePro) {
-					actions.push({
-						type: "remove-pro",
-						email: account.config.email,
-						label: account.config.label || account.config.email,
-						reason: `Free tier has significantly more combined quota (${effectiveFree}%) than Pro tier (${effectivePro}%). Downgrade to use Free tokens.`,
-					});
-				} else if (effectivePro === 0 && effectiveFree === 0) {
-					actions.push({
-						type: "remove-pro",
-						email: account.config.email,
-						label: account.config.label || account.config.email,
-						reason: `All quota exhausted (0%). Safe to remove from Pro family to free up a slot.`,
-					});
-				}
-			} else {
-				// Account is currently in FREE tier
-				if (effectivePro > effectiveFree) {
-					actions.push({
-						type: "add-pro",
-						email: account.config.email,
-						label: account.config.label || account.config.email,
-						reason: `Pro tier has significantly more combined quota (${effectivePro}%) than Free tier (${effectiveFree}%). Upgrade to use Pro tokens.`,
-						_diff: effectivePro - effectiveFree, // temporary property for sorting
-					} as ProAdvisorAction & { _diff: number });
-				}
-			}
-		}
-
-		// Sort add-pro actions by highest Pro quota difference
-		actions.sort((a, b) => {
-			if (a.type === "add-pro" && b.type === "add-pro") {
-				return ((b as any)._diff || 0) - ((a as any)._diff || 0);
-			}
-			return 0;
-		});
-
-		return { currentProCount, maxProSlots: maxSlots, actions };
 	}
 
 	private shouldUseRequestCountRotation(account: AccountRuntime, model?: string): boolean {

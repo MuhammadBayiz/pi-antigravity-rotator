@@ -1040,26 +1040,7 @@ export function startProxy(rotator: AccountRotator, port: number): void {
 			return;
 		}
 
-		if (method === "POST" && url?.startsWith("/api/account/swap-windows/")) {
-			if (!requireAdmin(req, res)) return;
-			const rest = url.slice("/api/account/swap-windows/".length);
-			const email = decodeURIComponent(rest);
-			const account = rotator.getAccountByEmail(email);
-			if (account && account.quotaWindows) {
-				for (const m of Object.keys(account.quotaWindows)) {
-					const temp = account.quotaWindows[m].pro;
-					account.quotaWindows[m].pro = account.quotaWindows[m].free;
-					account.quotaWindows[m].free = temp;
-				}
-				rotator.saveState();
-				res.writeHead(200);
-				res.end(JSON.stringify({ success: true }));
-			} else {
-				res.writeHead(404);
-				res.end("Account not found");
-			}
-			return;
-		}
+
 
 		if (method === "POST" && (url === "/api/settings/fresh-window-starts/on" || url === "/api/settings/fresh-window-starts/off")) {
 			if (!requireAdmin(req, res)) return;

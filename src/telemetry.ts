@@ -67,7 +67,6 @@ export function trackFeature(feature: string): void {
 export function getFeaturesSnapshot(): Record<string, boolean> {
 	return {
 		dashboard: _featuresUsed.has("dashboard"),
-		proAdvisor: _featuresUsed.has("proAdvisor"),
 		freshWindowToggle: _featuresUsed.has("freshWindowToggle"),
 		hostedLogin: _featuresUsed.has("hostedLogin"),
 	};

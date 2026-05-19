@@ -519,108 +519,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     font-size: 10px;
     line-height: 1.6;
   }
-  .dw-badge {
-    display: inline-block;
-    width: 32px;
-    text-align: center;
-    font-weight: 700;
-    font-size: 9px;
-    border-radius: 3px;
-    padding: 1px 4px;
-    flex-shrink: 0;
-  }
-  .dw-badge-pro {
-    background: rgba(52, 211, 153, 0.15);
-    color: var(--green);
-  }
-  .dw-badge-free {
-    background: rgba(250, 204, 21, 0.12);
-    color: var(--yellow);
-  }
-  .dw-quota {
-    font-weight: 700;
-    min-width: 28px;
-  }
-  .dw-reset {
-    color: var(--text-dim);
-  }
-  .dw-empty {
-    color: var(--text-dim);
-    font-style: italic;
-    opacity: 0.5;
-  }
 
-  .advisor-panel {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 16px 18px;
-    margin-bottom: 24px;
-  }
-
-  .advisor-title {
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-    color: var(--text-dim);
-    margin-bottom: 10px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .advisor-slots {
-    font-size: 12px;
-    font-family: 'JetBrains Mono', monospace;
-    color: var(--text);
-    margin-left: auto;
-    text-transform: none;
-    letter-spacing: 0;
-  }
-
-  .advisor-action {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px 10px;
-    margin-bottom: 6px;
-    border-radius: 8px;
-    font-size: 12px;
-  }
-
-  .advisor-action.add-pro {
-    background: rgba(52, 211, 153, 0.06);
-    border-left: 3px solid var(--green);
-  }
-
-  .advisor-action.remove-pro {
-    background: rgba(251, 191, 36, 0.06);
-    border-left: 3px solid var(--yellow);
-  }
-
-  .advisor-action-type {
-    font-weight: 600;
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    padding: 2px 6px;
-    border-radius: 4px;
-    flex-shrink: 0;
-  }
-
-  .advisor-action.add-pro .advisor-action-type {
-    background: rgba(52, 211, 153, 0.15);
-    color: var(--green);
-  }
-
-  .advisor-action.remove-pro .advisor-action-type {
-    background: rgba(251, 191, 36, 0.15);
-    color: var(--yellow);
-  }
-
-  .advisor-action-label { font-weight: 500; }
-  .advisor-action-reason { color: var(--text-dim); font-size: 11px; margin-left: auto; }
-  .advisor-empty { color: var(--text-dim); font-size: 12px; font-style: italic; }
   .routing-panel {
     border-radius: var(--radius);
     padding: 12px 14px;
@@ -1386,10 +1285,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       <svg viewBox="0 0 24 24"><path d="M12 8v5"/><path d="M12 17.5h.01"/><path d="M10.3 3.8 2.9 17a2 2 0 0 0 1.75 3h14.7A2 2 0 0 0 21.1 17L13.7 3.8a2 2 0 0 0-3.4 0Z"/></svg>
       <span class="header-icon-badge attention" id="attentionBadge" style="display:none">0</span>
     </button>
-    <button class="header-icon-btn advisor" id="advisorBtn" onclick="openModal('advisorModal')" title="Pro Family Advisor" aria-label="Open Pro Family Advisor">
-      <svg viewBox="0 0 24 24"><path d="m5 15 2-9 5 5 5-5 2 9"/><path d="M4 19h16"/></svg>
-      <span class="header-icon-badge advisor" id="advisorBadge" style="display:none">0</span>
-    </button>
+
     <button class="header-icon-btn heart-beat" id="kofiBtn" onclick="openModal('donationModal')" title="Support the Creator" aria-label="Buy me a coffee">
       <svg viewBox="0 0 24 24"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg>
     </button>
@@ -1481,15 +1377,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   </div>
 </div>
 
-<div class="modal" id="advisorModal" onclick="closeModal(event, 'advisorModal')">
-  <div class="modal-card" onclick="event.stopPropagation()">
-    <div class="modal-header">
-      <strong>Pro Family Advisor</strong>
-      <button class="modal-close" onclick="closeModal(null, 'advisorModal')" aria-label="Close advisor modal">×</button>
-    </div>
-    <div id="proAdvisor"></div>
-  </div>
-</div>
+
 
 <div class="modal" id="donationModal" onclick="closeModal(event, 'donationModal')">
   <div class="modal-card" onclick="event.stopPropagation()" style="max-width: 500px;">
@@ -1582,102 +1470,7 @@ function renderQuotaBars(account) {
   return '<div class="quota-section"><div class="quota-section-title">Quota (per model)</div>' + rows + '</div>';
 }
 
-function renderDualWindows(account) {
-  var qw = account.quotaWindows;
-  if (!qw) return '';
-  var models = Object.keys(qw);
-  if (models.length === 0) return '';
-  var now = Date.now();
-  var rows = models.map(function(modelKey) {
-    var t = qw[modelKey];
-    var shortName = modelKey.split('-').slice(0, 2).join('-');
-    if (shortName === 'claude-opus') shortName = 'claude'; // Clean up Claude display name
-    
-    var proLine = '';
-    var freeLine = '';
 
-    // PRO line
-    if (t.pro && t.pro.lastSeen > 0) {
-      var pQuota = t.pro.lastQuota;
-      var pReset = '';
-      if (t.pro.resetTimeMs > 0) {
-        var pRemain = t.pro.resetTimeMs - now;
-        if (pRemain > 0) {
-          var isRolling5h = pQuota === 100 && Math.abs(pRemain - (5 * 3600000)) < 600000;
-          var isRolling7d = pQuota === 100 && Math.abs(pRemain - (7 * 86400000)) < 600000;
-          if (isRolling5h || isRolling7d) {
-             pReset = '<span style="color:var(--green)">idle</span>';
-          } else {
-             pReset = 'resets in ' + formatDuration(pRemain);
-          }
-        } else {
-          // Reset has passed
-          var was5h = (t.pro.resetTimeMs - t.pro.lastSeen) < (24 * 3600 * 1000);
-          if (was5h) {
-            pQuota = Math.min(100, pQuota + 40);
-            pReset = '<span style="color:var(--green)">+40% idle</span>';
-          } else {
-            pQuota = 100;
-            pReset = '<span style="color:var(--text-dim)">idle</span>';
-          }
-        }
-      }
-      var pqColor = pQuota > 50 ? 'var(--green)' : pQuota > 20 ? 'var(--yellow)' : 'var(--red)';
-      proLine = '<div class="dw-row">' +
-        '<span class="dw-badge dw-badge-pro">PRO</span>' +
-        '<span class="dw-quota" style="color:' + pqColor + '">' + pQuota + '%</span>' +
-        '<span class="dw-reset">' + (pReset || '--') + '</span>' +
-      '</div>';
-    } else {
-      proLine = '<div class="dw-row"><span class="dw-badge dw-badge-pro">PRO</span><span class="dw-empty">no data</span></div>';
-    }
-
-    // FREE line
-    if (t.free && t.free.lastSeen > 0) {
-      var fQuota = t.free.lastQuota;
-      var fReset = '';
-      if (t.free.resetTimeMs > 0) {
-        var fRemain = t.free.resetTimeMs - now;
-        if (fRemain > 0) {
-          var isRolling5h = fQuota === 100 && Math.abs(fRemain - (5 * 3600000)) < 600000;
-          var isRolling7d = fQuota === 100 && Math.abs(fRemain - (7 * 86400000)) < 600000;
-          if (isRolling5h || isRolling7d) {
-             fReset = '<span style="color:var(--green)">idle</span>';
-          } else {
-             fReset = 'resets in ' + formatDuration(fRemain);
-          }
-        } else {
-          // Reset has passed
-          var fWas5h = (t.free.resetTimeMs - t.free.lastSeen) < (24 * 3600 * 1000);
-          if (fWas5h) {
-            fQuota = Math.min(100, fQuota + 40);
-            fReset = '<span style="color:var(--green)">+40% idle</span>';
-          } else {
-            fQuota = 100;
-            fReset = '<span style="color:var(--text-dim)">idle</span>';
-          }
-        }
-      }
-      var fqColor = fQuota > 50 ? 'var(--green)' : fQuota > 20 ? 'var(--yellow)' : 'var(--red)';
-      freeLine = '<div class="dw-row">' +
-        '<span class="dw-badge dw-badge-free">FREE</span>' +
-        '<span class="dw-quota" style="color:' + fqColor + '">' + fQuota + '%</span>' +
-        '<span class="dw-reset">' + (fReset || '--') + '</span>' +
-      '</div>';
-    } else {
-      freeLine = '<div class="dw-row"><span class="dw-badge dw-badge-free">FREE</span><span class="dw-empty">no data</span></div>';
-    }
-
-    return '<div class="dw-model">' +
-      '<div class="dw-model-name">' + shortName + '</div>' +
-      proLine + freeLine +
-    '</div>';
-  }).join('');
-  
-  var swapAllBtn = '<button class="btn-clear-flight" style="margin-left:auto;font-size:8px;padding:1px 4px" title="Manually swap Pro/Free classification for this entire account" onclick="swapWindows(\\'' + jsString(account.email) + '\\')">Swap All</button>';
-  
-  return '<div class="dw-section"><div class="dw-title" style="display:flex;align-items:center">Quota Windows (Pro / Free)' + swapAllBtn + '</div>' + rows + '</div>';
-}
 
 function renderAccounts(data) {
   window.__lastData = data;
@@ -1810,14 +1603,12 @@ function renderAccounts(data) {
         '<div class="card-label">' + escapeHtml(maskText(a.label)) + '</div>' +
         '<div class="card-badges">' +
           (a.proDetected ? '<span class="badge badge-pro">PRO</span>' : '<span class="badge badge-free">FREE</span>') +
-          (a.familyManager ? '<span class="badge badge-fmgr">FAMILY MGR</span>' : '') +
           '<span class="badge badge-' + escapeHtml(a.status) + (isActive ? ' pulse' : '') + '">' + escapeHtml(a.status) + '</span>' +
           modelBadges +
         '</div>' +
       '</div>' +
       '<div class="card-email">' + escapeHtml(maskEmail(a.email)) + '</div>' +
       (a.quota && a.quota.length > 0 ? renderQuotaBars(a) : '') +
-      renderDualWindows(a) +
       '<div class="card-stats">' +
         '<div class="card-stat"><div class="stat-label">Requests</div><div class="stat-value">' +
           a.requestsSinceRotation + ' / ' + a.totalRequests + ' total</div></div>' +
@@ -1851,7 +1642,7 @@ function renderAccounts(data) {
     '</div>';
   }).join('');
 
-  renderProAdvisor(data.proAdvisor);
+
 }
 
 
@@ -1992,7 +1783,6 @@ function renderListView() {
     var tierBadge = a.proDetected
       ? '<span class="badge badge-pro" style="font-size:9px">PRO</span>'
       : '<span class="badge badge-free" style="font-size:9px">FREE</span>';
-    if (a.familyManager) tierBadge += '<span class="badge badge-fmgr" style="font-size:9px">FMGR</span>';
 
     var quotaCell = avgQuota === null
       ? '<span style="color:var(--text-dim)">--</span>'
@@ -2950,44 +2740,7 @@ async function clearCircuitBreaker(modelKey) {
   refresh();
 }
 
-async function swapWindows(email) {
-  if (!confirm('Manually swap Pro and Free data for ALL models on this account? Use this only if the algorithm classified the account tier backward.')) return;
-  await authFetch('/api/account/swap-windows/' + encodeURIComponent(email), { method: 'POST' });
-  refresh();
-}
 
-function renderProAdvisor(advisor) {
-  var panel = document.getElementById('proAdvisor');
-  var button = document.getElementById('advisorBtn');
-  var badge = document.getElementById('advisorBadge');
-  if (!advisor) {
-    panel.innerHTML = '<div class="modal-empty">No advisor data available.</div>';
-    badge.style.display = 'none';
-    button.classList.remove('has-items');
-    return;
-  }
-  var title = '<div class="advisor-title">Pro Family Advisor' +
-    '<span class="advisor-slots">Slots: ' + advisor.currentProCount + '/' + advisor.maxProSlots + '</span></div>';
-  if (advisor.actions.length === 0) {
-    panel.innerHTML = title + '<div class="advisor-empty">No actions recommended</div>';
-    badge.style.display = 'none';
-    button.classList.remove('has-items');
-    return;
-  }
-  var rows = advisor.actions.map(function(a) {
-    var cls = a.type === 'add-pro' ? 'add-pro' : 'remove-pro';
-    var typeLabel = a.type === 'add-pro' ? 'Add Pro' : 'Remove Pro';
-    return '<div class="advisor-action ' + cls + '">' +
-      '<span class="advisor-action-type">' + typeLabel + '</span>' +
-      '<span class="advisor-action-label">' + escapeHtml(maskText(a.label)) + '</span>' +
-      '<span class="advisor-action-reason">' + escapeHtml(a.reason) + '</span>' +
-    '</div>';
-  }).join('');
-  panel.innerHTML = title + rows;
-  badge.style.display = 'inline-flex';
-  badge.textContent = String(advisor.actions.length);
-  button.classList.add('has-items');
-}
 
 function openModal(id) {
   var modal = document.getElementById(id);

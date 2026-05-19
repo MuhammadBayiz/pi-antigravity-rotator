@@ -11,8 +11,6 @@ export interface AccountConfig {
 	label?: string;
 	// Optional - pro/free is detected dynamically from quota API reset times
 	type?: AccountType;
-	// This account owns the family plan and can never be removed from Pro
-	familyManager?: boolean;
 }
 
 export interface Config {
@@ -23,8 +21,6 @@ export interface Config {
 	rotateOnQuotaDrop: number;
 	// How often to poll quota (ms). Default: 5min
 	quotaPollIntervalMs: number;
-	// Max simultaneous Pro accounts (owner + members). Default: 6
-	proSlots?: number;
 	// Hard cap on parallel requests per account. Conservative default is 1.
 	maxConcurrentRequestsPerAccount?: number;
 	// Hard cap on parallel requests per projectId/model. Conservative default is 1.
@@ -159,7 +155,6 @@ export interface AccountRuntime {
 	inFlightRequests: number;
 	inFlightByModel: Record<string, number>;
 	allowFreshWindowStartsOverride: boolean;
-	quotaWindows: QuotaWindowHistory;
 	dailyRequestCount: number;
 	dailyRequestDay: string;
 }
@@ -171,21 +166,6 @@ export interface ModelRotationState {
 	requestsOnActiveAccount: number;
 }
 
-// Persisted state across restarts
-export interface QuotaWindowInfo {
-	lastSeen: number;           // timestamp of last observation
-	resetTimeMs: number;        // epoch ms of the resetTime
-	resetTime: string | null;   // ISO string for display
-	lastQuota: number;          // percentRemaining when last seen
-}
-
-export interface DualWindowTracker {
-	pro: QuotaWindowInfo;
-	free: QuotaWindowInfo;
-}
-
-// Per-account quota window tracking: keyed by model key
-export type QuotaWindowHistory = Record<string, DualWindowTracker>;
 
 export interface PersistedSafetyState {
 	day: string;
@@ -218,7 +198,6 @@ export interface PersistedState {
 			disabled: boolean;
 			flagged: boolean;
 			allowFreshWindowStartsOverride?: boolean;
-			quotaWindows?: QuotaWindowHistory;
 		}
 	>;
 }
@@ -275,12 +254,6 @@ export interface StatusResponse {
 		disabledCount: number;
 		errorCount: number;
 	};
-	// Pro family sharing advisor
-	proAdvisor: {
-		currentProCount: number;
-		maxProSlots: number;
-		actions: ProAdvisorAction[];
-	};
 	recentEvents: RecentEvent[];
 	requestLog: RequestLogEntry[];
 	tokenUsage: TokenUsageData;
@@ -307,19 +280,10 @@ export interface AccountStatus {
 	inFlightByModel: Record<string, number>;
 	// Pro family sharing
 	proDetected: boolean;
-	quotaWindows: QuotaWindowHistory;
-	familyManager: boolean;
 	allowFreshWindowStartsOverride: boolean;
 	effectiveFreshWindowStartsAllowed: boolean;
 }
 
-// Pro advisor suggestion
-export interface ProAdvisorAction {
-	type: "add-pro" | "remove-pro";
-	email: string;
-	label: string;
-	reason: string;
-}
 
 export interface RecentEvent {
 	timestamp: number;
