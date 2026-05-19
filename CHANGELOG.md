@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.12.4] - 2026-05-18
+
+### Added
+- **Claude `cache_control` stripping**: Anthropic requests often include `cache_control` objects which Google Cloud Code Assist API rejects with "Extra inputs are not permitted". The proxy now safely strips `cache_control` from all system and message content blocks before forwarding them to Gemini.
+- **Claude `VALIDATED` Function Calling**: Automatically enforces `toolConfig: { functionCallingConfig: { mode: "VALIDATED" } }` for Claude models when tools are present, ensuring stricter schema adherence.
+- **Adaptive Thinking Budgets**: Replaced static thinking budget values with a dynamic `MODEL_SPECS` mapping. `gemini-3-flash` now correctly uses adaptive thinking budgets (`-1`) which allows the model to decide its own optimal reasoning length, while Pro models use strict budgets (e.g. `10001` for high).
+- **Max Output Tokens Enforcement**: The proxy now enforces hard `maxOutputTokens` caps based on the specific model's upper limits (e.g. `65535` vs `64000`), dynamically adjusting them to ensure there is enough room for both the thinking budget and the final output response without triggering upstream validation errors.
+
 ## [1.12.3] - 2026-05-18
 
 ### Fixed
