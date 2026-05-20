@@ -39,8 +39,8 @@ export function validateAccountConfig(value: unknown, path = "account"): Validat
 	if (!isNonEmptyString(value.projectId)) errors.push(`${path}.projectId must be a non-empty string`);
 	if (value.label !== undefined && typeof value.label !== "string") errors.push(`${path}.label must be a string`);
 	if (value.type !== undefined && value.type !== "pro" && value.type !== "free") errors.push(`${path}.type must be "pro" or "free"`);
-	if (value.tier !== undefined && !["ultra", "pro", "free", "unknown"].includes(String(value.tier))) {
-		errors.push(`${path}.tier must be "ultra", "pro", "free", or "unknown"`);
+	if (value.tier !== undefined && !["ultra", "pro", "plus", "free", "unknown"].includes(String(value.tier))) {
+		errors.push(`${path}.tier must be "ultra", "pro", "plus", "free", or "unknown"`);
 	}
 	if (value.familyManager !== undefined && typeof value.familyManager !== "boolean") errors.push(`${path}.familyManager must be a boolean`);
 

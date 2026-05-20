@@ -1,7 +1,7 @@
 // Account types and configuration
 
 export type AccountType = "pro" | "free";
-export type AccountTier = "ultra" | "pro" | "free" | "unknown";
+export type AccountTier = "ultra" | "pro" | "plus" | "free" | "unknown";
 export type RoutingPolicy = "timer-first" | "tier-first" | "quota-first" | "hybrid";
 
 export type RoutingRejectionReason =

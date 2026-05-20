@@ -766,7 +766,7 @@ export class AccountRotator {
 	): number {
 		const timerScore = (4 - priority) * 35;
 		const quotaScore = Math.max(0, quota) * 0.7;
-		const tierScore = Math.max(0, 3 - tier) * 18;
+		const tierScore = Math.max(0, 4 - tier) * 13.5;
 		const healthScore = Math.max(0, Math.min(1, health)) * 25;
 		const tokenScore = Math.max(0, Math.min(1, tokenRatio)) * 20;
 		const lruScore = Math.max(0, 10 - distance);
@@ -1238,8 +1238,9 @@ export class AccountRotator {
 		const tier = account.config.tier || "unknown";
 		if (tier === "ultra") return 0;
 		if (tier === "pro") return 1;
-		if (tier === "free") return 2;
-		return 3;
+		if (tier === "plus") return 2;
+		if (tier === "free") return 3;
+		return 4;
 	}
 
 	private refreshHealthScores(): void {
