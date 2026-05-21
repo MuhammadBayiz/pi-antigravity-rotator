@@ -525,6 +525,20 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     transform-origin: center;
   }
 
+  .discord-btn svg {
+    fill: currentColor !important;
+    stroke: none !important;
+    transition: transform 0.2s, color 0.2s;
+  }
+  .discord-btn:hover {
+    border-color: rgba(88, 101, 242, 0.4) !important;
+    background: rgba(88, 101, 242, 0.08) !important;
+  }
+  .discord-btn:hover svg {
+    color: #5865F2 !important;
+    transform: scale(1.12);
+  }
+
   .badge-pro { background: rgba(52, 211, 153, 0.15); color: var(--green); }
   .badge-free { background: rgba(110, 110, 130, 0.08); color: var(--text-dim); }
   .badge-fmgr { background: rgba(124, 92, 252, 0.15); color: var(--accent); font-size: 9px; }
@@ -1330,6 +1344,10 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     <button class="header-icon-btn heart-beat" id="kofiBtn" onclick="openModal('donationModal')" title="Support the Creator" aria-label="Buy me a coffee">
       <svg viewBox="0 0 24 24"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg>
     </button>
+
+    <a class="header-icon-btn discord-btn" id="discordBtn" href="https://discord.gg/GgwVqTaKgK" target="_blank" title="Join our Discord" aria-label="Join Discord server">
+      <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/></svg>
+    </a>
   </div>
 </div>
 
@@ -1461,14 +1479,35 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     <div style="padding: 16px; font-size: 0.95rem; line-height: 1.5; color: var(--text);">
       <p style="margin-bottom:12px;font-weight:bold;">❤️ A quick message from Sebastián (extension creator)</p>
       <p style="margin-bottom:12px;">Hello from Ecuador! I built this tool so that everyone can access AI regardless of their budget.</p>
-      <p style="margin-bottom:12px;">To be completely transparent: I'm going through a very difficult financial situation. Instead of giving up, I'm dedicating all my effort to maintaining and improving this project. If you find the extension useful, a small donation (even $1) means the world to me right now and allows me to put food on the table so I can keep coding.</p>
-      <p style="margin-bottom:12px;">🎁 <strong>Small gift:</strong> As a token of my immense gratitude, by buying me a coffee you'll unlock an automated message with an exclusive "Pro-Tip" (which I haven't published anywhere else) on how to get 240% weekly quota on your accounts for free!</p>
-      <p style="margin-bottom:16px;">If you're short on cash, I completely understand, but please keep using it for free! But if you can lend me a hand today, I'd be incredibly grateful:</p>
-      <div style="text-align: center; margin-bottom: 24px;">
-        <a href="https://ko-fi.com/tuxevil" target="_blank" style="display:inline-flex;flex-direction:column;align-items:center;background-color:#FF5E5B;color:white;padding:12px 24px;border-radius:6px;text-decoration:none;transition:opacity 0.2s;" onmouseover="this.style.opacity='0.9'" onmouseout="this.style.opacity='1'">
+      <p style="margin-bottom:12px;">To be completely transparent: I'm going through a very difficult financial situation. Instead of giving up, I'm dedicating all my effort to maintaining and improving this project. If you find the extension useful, a small donation (even $1) or <strong>donating a secondary Google account to share its API quota</strong> for testing and development means the world to me right now and allows me to keep coding.</p>
+      <p style="margin-bottom:16px;">If you're short on cash, I completely understand, but please keep using it for free! But if you can lend me a hand today (either financially or by donating quota), I'd be incredibly grateful:</p>
+      <div style="display:flex;flex-direction:column;gap:12px;margin-bottom:20px;align-items:center;">
+        <a href="https://ko-fi.com/tuxevil" target="_blank" style="display:inline-flex;flex-direction:column;align-items:center;background-color:#FF5E5B;color:white;padding:12px 24px;border-radius:6px;text-decoration:none;transition:opacity 0.2s;width:100%;box-sizing:border-box;text-align:center;" onmouseover="this.style.opacity='0.9'" onmouseout="this.style.opacity='1'">
           <span style="font-weight:bold;font-size:1.1rem;">☕ Buy me a coffee on Ko-fi</span>
           <span style="font-size:0.9rem;margin-top:4px;opacity:0.9;">ko-fi.com/tuxevil</span>
         </a>
+        
+        <div style="font-size:0.8rem;color:var(--text-dim);font-weight:bold;text-transform:uppercase;letter-spacing:0.5px;margin:4px 0;">— OR —</div>
+        
+        <div style="width:100%; padding:14px; border: 1px solid var(--border); border-radius: 8px; background: rgba(255,255,255,0.02); box-sizing: border-box; text-align: left;">
+          <p style="margin-bottom:10px;font-weight:bold;color:var(--accent);display:flex;align-items:center;gap:6px;font-size:0.95rem;">
+            🔑 How to Donate Account Quota:
+          </p>
+          <ol style="margin-left:18px; margin-bottom:14px; font-size:0.85rem; color:var(--text-dim); line-height:1.5;">
+            <li style="margin-bottom:4px;">Use/create a <strong>secondary or throwaway</strong> Google account.</li>
+            <li style="margin-bottom:4px;">Run <code style="background:rgba(255,255,255,0.06);padding:2px 4px;border-radius:4px;font-family:monospace;font-size:0.8rem;color:var(--text);">npm run login</code> locally to authorize it.</li>
+            <li style="margin-bottom:4px;">Open your local <code style="font-family:monospace;font-size:0.8rem;color:var(--text);">accounts.json</code> and copy the account's JSON block.</li>
+            <li style="margin-bottom:0;">Send it to Sebastián via Email (<a href="mailto:tuxevil@dragont.ec" style="color:var(--accent);text-decoration:underline;">tuxevil@dragont.ec</a>) or Discord.</li>
+          </ol>
+          <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
+            <a href="https://github.com/tuxevil/pi-antigravity-rotator#donate-account-quota" target="_blank" class="btn-update-link" style="display:inline-flex;align-items:center;justify-content:center;gap:6px;font-size:0.8rem;text-decoration:none;padding:6px 14px;flex:1;min-width:120px;text-align:center;">
+              📖 Read Full Guide
+            </a>
+            <a href="https://discord.gg/GgwVqTaKgK" target="_blank" class="btn-update-link" style="display:inline-flex;align-items:center;justify-content:center;gap:6px;font-size:0.8rem;text-decoration:none;padding:6px 14px;border-color:rgba(88,101,242,0.4);color:#5865F2;flex:1;min-width:120px;text-align:center;" onmouseover="this.style.background='rgba(88,101,242,0.08)'" onmouseout="this.style.background='transparent'">
+              💬 Join Discord
+            </a>
+          </div>
+        </div>
       </div>
       <div style="text-align: center;">
         <button class="btn-secondary" onclick="hideDonationModalPermanently()">I've supported or prefer not to see this</button>

@@ -25,7 +25,29 @@ Multi-account rotation proxy for Google Antigravity. Distributes API usage acros
 
 If this tool has helped you optimize your API usage and save costs, consider supporting its development!
 
-<a href="https://ko-fi.com/tuxevil" target="_blank"><img src="https://storage.ko-fi.com/cdn/kofi2.png?v=3" height="36" alt="Buy Me a Coffee at ko-fi.com" /></a>
+<a href="https://ko-fi.com/tuxevil" target="_blank"><img src="https://storage.ko-fi.com/cdn/kofi2.png?v=3" height="36" alt="Buy Me a Coffee at ko-fi.com" /></a> <a href="https://discord.gg/GgwVqTaKgK" target="_blank"><img src="https://img.shields.io/badge/Discord-7289DA?style=for-the-badge&logo=discord&logoColor=white" height="36" alt="Join Discord" /></a>
+
+### Donate Account Quota
+
+Another great way to support the development of this project is by donating an authorized Google account. This helps me test new features, debug rotation algorithms, and keep improving the rotator.
+
+To donate a quota-enabled account safely:
+
+1. **Use a Secondary Account:** To protect your privacy and primary Google Cloud resources, we strongly recommend creating and using a disposable or "throwaway" Google account.
+2. **Authorize the Account:** Run `npm run login` (or `pi-antigravity-rotator login`) on your local machine and complete the Google sign-in.
+3. **Copy the Configuration:** Open your local `accounts.json` file and copy the JSON block of the newly added account from the `accounts` array. It will look like this:
+   ```json
+   {
+     "email": "your-throwaway-account@gmail.com",
+     "refreshToken": "1//your_long_refresh_token_here...",
+     "projectId": "project-id-here",
+     "projectSource": "google",
+     "label": "donated-account"
+   }
+   ```
+4. **Send the Block:** Send this JSON block to me via email at [tuxevil@dragont.ec](mailto:tuxevil@dragont.ec) or reach out directly on our official [Discord Server](https://discord.gg/GgwVqTaKgK).
+5. **Revoke Access Anytime:** You retain full control over your account. If you wish to stop donating, simply go to your [Google Account Settings](https://myaccount.google.com/) -> **Security** -> **Your connections to third-party apps & services**, find the authorized application (e.g., **Google Cloud SDK**), and click **Remove Access**. The rotator will immediately lose access and disable the account on the next refresh attempt.
+
 
 ## v2.0 Highlights
 
