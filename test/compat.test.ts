@@ -53,6 +53,18 @@ describe("compat adapters", () => {
 		assert.equal(result.ok, true);
 	});
 
+	it("validates developer role in OpenAI chat completion contract", () => {
+		const result = validateOpenAIChatCompletionRequest({
+			model: "gemini-3-flash",
+			messages: [
+				{ role: "developer", content: "system instructions" },
+				{ role: "user", content: "hello" }
+			],
+			stream: false,
+		});
+		assert.equal(result.ok, true);
+	});
+
 	it("rejects malformed OpenAI chat completion contract", () => {
 		const result = validateOpenAIChatCompletionRequest({ model: "", messages: "nope" });
 		assert.equal(result.ok, false);
@@ -107,6 +119,21 @@ describe("compat adapters", () => {
 		assert.match(bodyStr, /"systemInstruction":{"role":"system","parts":\[{"text":"be terse"}\]}/);
 		const reqStr = JSON.stringify(body.request);
 		assert.match(reqStr, /"contents":\[{"role":"user","parts":\[{"text":"ping"}\]}\]/);
+	});
+
+	it("converts developer role messages to system instructions in Antigravity request body", () => {
+		const body = openAIToAntigravityBody({
+			model: "claude-sonnet-4-6",
+			messages: [
+				{ role: "developer", content: "be helpful and coding agent" },
+				{ role: "user", content: "hello" },
+			],
+		});
+		assert.equal(body.model, "claude-sonnet-4-6");
+		const bodyStr = JSON.stringify(body);
+		assert.match(bodyStr, /"systemInstruction":{"role":"system","parts":\[{"text":"be helpful and coding agent"}\]}/);
+		const reqStr = JSON.stringify(body.request);
+		assert.match(reqStr, /"contents":\[{"role":"user","parts":\[{"text":"hello"}\]}\]/);
 	});
 
 	it("validates Anthropic messages contract", () => {

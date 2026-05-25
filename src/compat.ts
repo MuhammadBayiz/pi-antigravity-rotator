@@ -10,7 +10,7 @@ import { withRotation, flattenHeaders, type RequestBody } from "./proxy.js";
 const compatLogger = logger.child("compat");
 
 export interface ChatMessage {
-	role: "system" | "user" | "assistant" | "model" | "tool";
+	role: "system" | "developer" | "user" | "assistant" | "model" | "tool";
 	content: string | Array<{ type: string; text?: string;[key: string]: unknown }> | null;
 	tool_calls?: OpenAIToolCall[];
 	tool_call_id?: string;
@@ -531,7 +531,7 @@ function convertToolChoiceToGemini(toolChoice: unknown): GeminiToolConfig | unde
 function validateMessages(value: unknown): value is ChatMessage[] {
 	return Array.isArray(value) && value.every((msg) => {
 		if (!isRecord(msg)) return false;
-		if (!["system", "user", "assistant", "model", "tool"].includes(String(msg.role))) return false;
+		if (!["system", "developer", "user", "assistant", "model", "tool"].includes(String(msg.role))) return false;
 		return typeof msg.content === "string" || msg.content === null || Array.isArray(msg.content);
 	});
 }
@@ -1009,7 +1009,7 @@ export function openAIToAntigravityBody(input: OpenAIChatCompletionRequest): Req
 	// Separate system messages from conversation turns
 	const systemParts: string[] = [];
 	const conversationMessages = input.messages.filter((msg) => {
-		if (msg.role === "system") {
+		if (msg.role === "system" || msg.role === "developer") {
 			const text = typeof msg.content === "string" ? msg.content : extractText(msg.content);
 			if (text) systemParts.push(text);
 			return false;

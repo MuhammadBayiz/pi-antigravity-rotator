@@ -458,7 +458,7 @@ Current adapter scope:
 
 - Text chat/messages.
 - **Responses API compatibility**: Supports `POST /v1/responses` plus basic in-memory retrieve/delete/cancel/input-items endpoints for Codex-style agents.
-- **Model Role Support**: Fully supports the `"model"` role in chat message histories (e.g., from Pi or Hermes agents), validating and routing it identically to the `"assistant"` role.
+- **Developer and Model Role Support**: Fully supports the `"developer"` (mapped to system instructions) and `"model"` roles in chat message histories, validating and routing them correctly.
 - **Request Normalization**: Automatically normalizes loose inputs (non-array messages), legacy prompt/input fields (e.g. `prompt` strings/arrays or `input` structures), and raw native Antigravity requests (`request.contents`) into standard OpenAI/Anthropic format.
 - **Native Reasoning visibility**: Models with thinking capabilities (Gemini 3 Pro, Gemini 3.5 Flash, Claude Sonnet 4.6 Thinking) automatically expose their interleaved thinking blocks in real-time as OpenAI `reasoning_content` or Anthropic `thinking_delta` chunks.
 - Streaming mode is supported as compatibility SSE. The adapter buffers the upstream Antigravity stream, then emits one OpenAI/Anthropic-compatible final delta. Native token-by-token pass-through is not implemented yet.

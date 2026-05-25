@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [2.1.2] - 2026-05-25
+
+### Added
+- **Developer Role Support**: Added comprehensive compatibility and validation support for the newer `"developer"` role (introduced by OpenAI to replace the system prompt on models like o1/gpt-4o).
+- **Developer Message Routing**: Automatically routes messages with the `"developer"` role as system instructions upstream in the Antigravity request mapping.
+- **Improved Adapter Coverage**: Extended type validation and integration testing in the compat adapters to fully cover the new schema additions.
+
 ## [2.1.1] - 2026-05-21
 
 ### Added
