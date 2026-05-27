@@ -11,6 +11,8 @@
   - **Consecutive tool result merging**: Multiple `functionResponse` parts are now merged into a single `user` Gemini turn, ensuring all `tool_result` blocks appear in one message directly after the `tool_use` assistant message.
 
 
+## [2.1.4] - 2026-05-27
+
 ### Improved
 - **Less Lossy Schema Collapsing for Claude**: The `sanitizeClaudeViaGeminiSchema` function now handles complex `anyOf`/`oneOf`/`allOf` schemas with significantly less information loss:
   - **Nullable detection (lossless)**: `anyOf: [{type: X}, {type: "null"}]` patterns are now converted to `{type: X, nullable: true}` instead of losing the null variant.
