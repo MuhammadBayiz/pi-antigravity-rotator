@@ -24,7 +24,7 @@ async function waitForHealth(port: number): Promise<void> {
 describe("telemetry receiver", () => {
 	let dir = "";
 	let proc: ReturnType<typeof spawn> | null = null;
-	const port = 3901;
+	const port = 40000 + Math.floor(Math.random() * 20000);
 
 	before(async () => {
 		dir = await mkdtemp(join(tmpdir(), "pi-telemetry-"));
