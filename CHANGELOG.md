@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [2.1.4] - 2026-05-27
+
+### Improved
+- **Less Lossy Schema Collapsing for Claude**: The `sanitizeClaudeViaGeminiSchema` function now handles complex `anyOf`/`oneOf`/`allOf` schemas with significantly less information loss:
+  - **Nullable detection (lossless)**: `anyOf: [{type: X}, {type: "null"}]` patterns are now converted to `{type: X, nullable: true}` instead of losing the null variant.
+  - **`allOf` deep merge (lossless)**: `allOf` variants are now deep-merged (properties union + required union) instead of picking only the first variant.
+  - **`anyOf`/`oneOf` object merge**: When all variants are objects, properties are merged into a union and only fields required in ALL variants remain required, preserving wider input acceptance.
+  - The first-variant fallback is still used for truly incompatible mixed-type unions.
+
+### Fixed
+- **README: Incorrect model names in Codex section**: Removed references to nonexistent `claude-3-5-sonnet` and `gemini-3-pro` models, replaced with actual supported models (`claude-opus-4-6-thinking`, `gemini-3.1-pro`, `gpt-oss-120b`, etc.).
+
+### Added
+- **Schema sanitizer tests**: Added test cases for nullable detection, `allOf` deep merge, and `anyOf` object variant merging.
+
 ## [2.1.3] - 2026-05-27
 
 ### Fixed

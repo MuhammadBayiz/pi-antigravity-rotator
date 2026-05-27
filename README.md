@@ -500,9 +500,10 @@ To connect Codex to your local rotator:
 
 3. **Select a Supported Model**:
    Configure Codex to target one of the following models supported by the rotator (which will be mapped to the best available Google Antigravity account/model under the hood):
-   - `gemini-3.5-flash` or `gemini-3.5-flash-high` / `gemini-3.5-flash-low` (Recommended for fast general reasoning)
-   - `gemini-3-pro` or `gemini-pro-agent` (For deep reasoning)
-   - `claude-sonnet-4-6` or `claude-3-5-sonnet` (Alternative routing fallback)
+   - `gemini-3.5-flash` or `gemini-3.5-flash-high` / `gemini-3.5-flash-low` / `gemini-3.5-flash-medium` (Recommended for fast general reasoning)
+   - `gemini-3.1-pro` or `gemini-pro-agent` / `gemini-3.1-pro-high` / `gemini-3.1-pro-low` (For deep reasoning)
+   - `claude-sonnet-4-6` or `claude-opus-4-6-thinking` (Claude models via Vertex AI)
+   - `gpt-oss-120b` or `gpt-oss-120b-medium` (Open-source GPT model)
 
    Example Codex configuration entry:
    ```json

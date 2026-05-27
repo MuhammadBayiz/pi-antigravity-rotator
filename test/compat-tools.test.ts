@@ -201,5 +201,130 @@ data: [DONE]
 		assert.strictEqual(valueParam.minLength, 3);
 		assert.strictEqual(valueParam.anyOf, undefined);
 	});
+
+	it("converts anyOf with null variant to nullable:true (lossless)", () => {
+		const req: OpenAIChatCompletionRequest = {
+			model: "claude-sonnet-4-6",
+			messages: [{ role: "user", content: "Hi" }],
+			tools: [
+				{
+					type: "function",
+					function: {
+						name: "nullable_tool",
+						parameters: {
+							type: "object",
+							properties: {
+								name: {
+									anyOf: [
+										{ type: "string" },
+										{ type: "null" }
+									]
+								}
+							}
+						}
+					}
+				}
+			]
+		};
+
+		const result = openAIToAntigravityBody(req);
+		const request = result.request as any;
+		const nameParam = request.tools[0].functionDeclarations[0].parameters.properties.name;
+		assert.strictEqual(nameParam.type, "string");
+		assert.strictEqual(nameParam.nullable, true);
+		assert.strictEqual(nameParam.anyOf, undefined);
+	});
+
+	it("deep merges allOf variants for Claude schemas (lossless)", () => {
+		const req: OpenAIChatCompletionRequest = {
+			model: "claude-sonnet-4-6",
+			messages: [{ role: "user", content: "Hi" }],
+			tools: [
+				{
+					type: "function",
+					function: {
+						name: "allof_tool",
+						parameters: {
+							type: "object",
+							allOf: [
+								{
+									type: "object",
+									properties: { a: { type: "string" } },
+									required: ["a"]
+								},
+								{
+									type: "object",
+									properties: { b: { type: "number" } },
+									required: ["b"]
+								}
+							]
+						}
+					}
+				}
+			]
+		};
+
+		const result = openAIToAntigravityBody(req);
+		const request = result.request as any;
+		const params = request.tools[0].functionDeclarations[0].parameters;
+		assert.strictEqual(params.allOf, undefined);
+		assert.deepStrictEqual(params.properties, {
+			a: { type: "string" },
+			b: { type: "number" }
+		});
+		assert.deepStrictEqual(params.required.sort(), ["a", "b"]);
+	});
+
+	it("merges anyOf object variants into union of properties", () => {
+		const req: OpenAIChatCompletionRequest = {
+			model: "claude-sonnet-4-6",
+			messages: [{ role: "user", content: "Hi" }],
+			tools: [
+				{
+					type: "function",
+					function: {
+						name: "union_tool",
+						parameters: {
+							type: "object",
+							properties: {
+								event: {
+									anyOf: [
+										{
+											type: "object",
+											properties: {
+												kind: { type: "string" },
+												data: { type: "string" }
+											},
+											required: ["kind", "data"]
+										},
+										{
+											type: "object",
+											properties: {
+												kind: { type: "string" },
+												error: { type: "string" }
+											},
+											required: ["kind", "error"]
+										}
+									]
+								}
+							}
+						}
+					}
+				}
+			]
+		};
+
+		const result = openAIToAntigravityBody(req);
+		const request = result.request as any;
+		const eventParam = request.tools[0].functionDeclarations[0].parameters.properties.event;
+		assert.strictEqual(eventParam.type, "object");
+		assert.strictEqual(eventParam.anyOf, undefined);
+		// All properties from all variants should be present
+		assert.ok(eventParam.properties.kind);
+		assert.ok(eventParam.properties.data);
+		assert.ok(eventParam.properties.error);
+		// Only "kind" is required in ALL variants
+		assert.deepStrictEqual(eventParam.required, ["kind"]);
+	});
 });
 

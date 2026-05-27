@@ -470,17 +470,98 @@ function sanitizeClaudeViaGeminiSchema(schema: unknown): unknown {
 					}
 				}
 
-				// General case: collapse to the first valid variant.
+				// Sanitize all variants first.
+				const cleaned = value.map(sanitizeClaudeViaGeminiSchema).filter(
+					(v) => isRecord(v) && Object.keys(v).length > 0,
+				) as Record<string, unknown>[];
+
+				if (cleaned.length === 0) {
+					// All variants collapsed to nothing — skip entirely.
+					continue;
+				}
+
+				// Case 3: nullable pattern — anyOf/oneOf with exactly one {type:"null"}
+				// variant and one or more real variants. Convert to the real variant
+				// with nullable:true. This is lossless — Gemini's proto supports nullable.
+				// e.g. anyOf:[{type:"string"},{type:"null"}] → {type:"string",nullable:true}
+				if (key !== "allOf") {
+					const nullIdx = cleaned.findIndex((v) => v.type === "null" && Object.keys(v).length === 1);
+					if (nullIdx !== -1) {
+						const nonNull = cleaned.filter((_, i) => i !== nullIdx);
+						if (nonNull.length === 1) {
+							Object.assign(out, nonNull[0], { nullable: true });
+							continue;
+						}
+						if (nonNull.length > 1) {
+							// Multiple non-null variants + null → collapse non-null variants,
+							// then mark nullable. Still lossy but preserves nullability.
+							Object.assign(out, nonNull[0], { nullable: true });
+							continue;
+						}
+					}
+				}
+
+				// Case 4: allOf — deep merge all variants (allOf = intersection).
+				// Merging properties from all variants is semantically correct.
+				if (key === "allOf") {
+					const merged: Record<string, unknown> = {};
+					let mergedProperties: Record<string, unknown> = {};
+					let mergedRequired: string[] = [];
+					for (const variant of cleaned) {
+						for (const [vk, vv] of Object.entries(variant)) {
+							if (vk === "properties" && isRecord(vv)) {
+								mergedProperties = { ...mergedProperties, ...vv };
+							} else if (vk === "required" && Array.isArray(vv)) {
+								mergedRequired = [...new Set([...mergedRequired, ...vv])];
+							} else {
+								merged[vk] = vv;
+							}
+						}
+					}
+					if (Object.keys(mergedProperties).length > 0) merged["properties"] = mergedProperties;
+					if (mergedRequired.length > 0) merged["required"] = mergedRequired;
+					Object.assign(out, merged);
+					continue;
+				}
+
+				// Case 5: anyOf/oneOf where all variants are objects with properties —
+				// merge all properties together, making all optional (union of shapes).
+				// This is mildly lossy (accepts wider input) but doesn't reject valid inputs.
+				const allObjects = cleaned.every(
+					(v) => v.type === "object" && isRecord(v.properties),
+				);
+				if (allObjects && cleaned.length > 1) {
+					const unionProperties: Record<string, unknown> = {};
+					for (const variant of cleaned) {
+						const props = variant.properties as Record<string, unknown>;
+						for (const [pk, pv] of Object.entries(props)) {
+							if (!(pk in unionProperties)) unionProperties[pk] = pv;
+						}
+					}
+					// Only keep required fields that exist in ALL variants
+					const allRequired = cleaned.map((v) =>
+						Array.isArray(v.required) ? new Set(v.required as string[]) : new Set<string>(),
+					);
+					const commonRequired = [...allRequired[0]].filter((r) =>
+						allRequired.every((s) => s.has(r)),
+					);
+					const base = { ...cleaned[0] };
+					base["properties"] = unionProperties;
+					if (commonRequired.length > 0) {
+						base["required"] = commonRequired;
+					} else {
+						delete base["required"];
+					}
+					Object.assign(out, base);
+					continue;
+				}
+
+				// Fallback: collapse to the first valid variant.
 				// Gemini's Schema proto serialization corrupts complex anyOf/oneOf
 				// during the round-trip to Claude, causing JSON Schema draft 2020-12
 				// validation failures. Collapsing is lossy but functional — the tool
 				// still works, just with a narrower accepted input type.
-				const cleaned = value.map(sanitizeClaudeViaGeminiSchema).filter(
-					(v) => isRecord(v) && Object.keys(v).length > 0,
-				);
-				if (cleaned.length >= 1) {
-					Object.assign(out, cleaned[0]);
-				}
+				Object.assign(out, cleaned[0]);
 			}
 			continue;
 		}
