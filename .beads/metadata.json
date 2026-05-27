@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "pi_antigravity_rotator",
+  "project_id": "fa05ca42-1d59-4208-afc9-ca9048390bca"
+}
