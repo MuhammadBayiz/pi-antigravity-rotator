@@ -287,4 +287,35 @@ describe("compat adapters", () => {
 			assert.match(JSON.stringify(body.request), /"functionResponse"/);
 		}
 	});
+
+	it("converts Anthropic tool_use and tool_result messages correctly", () => {
+		const body = anthropicToAntigravityBody({
+			model: "claude-sonnet-4-6",
+			messages: [
+				{
+					role: "user",
+					content: [{ type: "text", text: "Please look up pi" }],
+				},
+				{
+					role: "assistant",
+					content: [
+						{ type: "text", text: "Sure, let me check." },
+						{ type: "tool_use", id: "tool_call_xyz", name: "lookup", input: { q: "pi" } },
+					],
+				},
+				{
+					role: "user",
+					content: [
+						{ type: "tool_result", tool_use_id: "tool_call_xyz", content: "3.14159" }
+					]
+				}
+			],
+		});
+
+		const reqStr = JSON.stringify(body.request);
+		// Check that the tool call and response are correctly structured
+		assert.match(reqStr, /"functionCall":\{"id":"tool_call_xyz","name":"lookup","args":\{"q":"pi"\}\}/);
+		assert.match(reqStr, /"functionResponse":\{"id":"tool_call_xyz","name":"lookup","response":\{"value":"3\.14159"\}|\{"content":"3\.14159"\}|\{"text":"3\.14159"\}|3\.14159\}/);
+	});
 });
+
