@@ -470,16 +470,17 @@ function sanitizeClaudeViaGeminiSchema(schema: unknown): unknown {
 					}
 				}
 
-				// General case: recurse and sanitize each variant.
+				// General case: collapse to the first valid variant.
+				// Gemini's Schema proto serialization corrupts complex anyOf/oneOf
+				// during the round-trip to Claude, causing JSON Schema draft 2020-12
+				// validation failures. Collapsing is lossy but functional — the tool
+				// still works, just with a narrower accepted input type.
 				const cleaned = value.map(sanitizeClaudeViaGeminiSchema).filter(
 					(v) => isRecord(v) && Object.keys(v).length > 0,
 				);
-				if (cleaned.length === 1) {
+				if (cleaned.length >= 1) {
 					Object.assign(out, cleaned[0]);
-				} else if (cleaned.length > 1) {
-					out[key] = cleaned;
 				}
-				// cleaned.length === 0: skip entirely
 			}
 			continue;
 		}
@@ -1209,16 +1210,109 @@ export function openAIToAntigravityBody(input: OpenAIChatCompletionRequest): Req
 	};
 }
 
+/** Convert Anthropic tools [{name, description, input_schema}] → OpenAI format [{type:"function", function:{name, description, parameters}}] */
+function convertAnthropicToolsToOpenAI(tools: unknown): OpenAITool[] | undefined {
+	if (!Array.isArray(tools) || tools.length === 0) return undefined;
+	const result: OpenAITool[] = [];
+	for (const t of tools) {
+		if (!isRecord(t) || !isNonEmptyString(t.name)) continue;
+		result.push({
+			type: "function",
+			function: {
+				name: t.name as string,
+				...(typeof t.description === "string" ? { description: t.description } : {}),
+				...(isRecord(t.input_schema) ? { parameters: t.input_schema as Record<string, unknown> } : {}),
+			},
+		});
+	}
+	return result.length > 0 ? result : undefined;
+}
+
+/** Convert Anthropic tool_choice → OpenAI tool_choice */
+function convertAnthropicToolChoice(toolChoice: unknown): unknown {
+	if (!isRecord(toolChoice)) return toolChoice;
+	if (toolChoice.type === "auto") return "auto";
+	if (toolChoice.type === "any") return "required";
+	if (toolChoice.type === "tool" && isNonEmptyString(toolChoice.name)) {
+		return { type: "function", function: { name: toolChoice.name } };
+	}
+	return "auto";
+}
+
+/**
+ * Convert Anthropic-format messages (tool_use / tool_result content blocks)
+ * to OpenAI-format messages (tool_calls array / role:"tool" messages).
+ */
+function convertAnthropicMessagesToOpenAI(messages: ChatMessage[]): ChatMessage[] {
+	const result: ChatMessage[] = [];
+	for (const msg of messages) {
+		// Assistant messages with tool_use content blocks → tool_calls
+		if (msg.role === "assistant" && Array.isArray(msg.content)) {
+			const blocks = msg.content as Array<Record<string, unknown>>;
+			const toolUseBlocks = blocks.filter(
+				(b) => isRecord(b) && b.type === "tool_use" && isNonEmptyString(b.name),
+			);
+			if (toolUseBlocks.length > 0) {
+				const textParts = blocks
+					.filter((b) => isRecord(b) && b.type === "text" && typeof b.text === "string")
+					.map((b) => b.text as string)
+					.join("");
+				const toolCalls: OpenAIToolCall[] = toolUseBlocks.map((b) => ({
+					id: (b.id as string) || `call_${Date.now().toString(36)}`,
+					type: "function" as const,
+					function: {
+						name: b.name as string,
+						arguments: typeof b.input === "string" ? b.input : JSON.stringify(b.input ?? {}),
+					},
+				}));
+				result.push({ role: "assistant", content: textParts || null, tool_calls: toolCalls });
+				continue;
+			}
+		}
+		// User messages with tool_result content blocks → role:"tool" messages
+		if (msg.role === "user" && Array.isArray(msg.content)) {
+			const blocks = msg.content as Array<Record<string, unknown>>;
+			const toolResults = blocks.filter((b) => isRecord(b) && b.type === "tool_result");
+			if (toolResults.length > 0) {
+				const otherBlocks = blocks.filter((b) => !isRecord(b) || b.type !== "tool_result");
+				if (otherBlocks.length > 0) {
+					result.push({ role: "user", content: otherBlocks as ChatMessage["content"] });
+				}
+				for (const tr of toolResults) {
+					const content = typeof tr.content === "string"
+						? tr.content
+						: Array.isArray(tr.content)
+						? extractTextFromUnknownContent(tr.content)
+						: JSON.stringify(tr.content ?? "");
+					result.push({
+						role: "tool",
+						content,
+						tool_call_id: tr.tool_use_id as string,
+					});
+				}
+				continue;
+			}
+		}
+		result.push(msg);
+	}
+	return result;
+}
+
 export function anthropicToAntigravityBody(input: AnthropicMessagesRequest): RequestBody {
 	const systemText = typeof input.system === "string" ? input.system : Array.isArray(input.system) ? extractText(input.system as ChatMessage["content"]) : "";
+	const tools = convertAnthropicToolsToOpenAI(input.tools);
+	const toolChoice = convertAnthropicToolChoice(input.tool_choice);
+	const convertedMessages = convertAnthropicMessagesToOpenAI(input.messages);
 	return openAIToAntigravityBody({
 		model: input.model,
 		stream: input.stream,
 		temperature: input.temperature,
 		max_tokens: input.max_tokens,
+		tools,
+		tool_choice: toolChoice,
 		messages: [
 			...(systemText ? [{ role: "system" as const, content: systemText }] : []),
-			...input.messages,
+			...convertedMessages,
 		],
 	});
 }
@@ -1410,11 +1504,28 @@ function writeAnthropicStream(res: ServerResponse, model: string, completion: Co
 		res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: contentIndex })}\n\n`);
 		contentIndex++;
 	}
-	res.write(`event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index: contentIndex, content_block: { type: "text", text: "" } })}\n\n`);
-	if (completion.text) res.write(`event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", index: contentIndex, delta: { type: "text_delta", text: completion.text } })}\n\n`);
-	res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: contentIndex })}\n\n`);
+	if (completion.text) {
+		res.write(`event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index: contentIndex, content_block: { type: "text", text: "" } })}\n\n`);
+		res.write(`event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", index: contentIndex, delta: { type: "text_delta", text: completion.text } })}\n\n`);
+		res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: contentIndex })}\n\n`);
+		contentIndex++;
+	}
+	// Emit tool_use content blocks if present
+	let hasToolUse = false;
+	if (completion.toolCalls && completion.toolCalls.length > 0) {
+		hasToolUse = true;
+		for (const tc of completion.toolCalls) {
+			let parsedInput: unknown;
+			try { parsedInput = JSON.parse(tc.function.arguments || "{}"); } catch { parsedInput = {}; }
+			res.write(`event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index: contentIndex, content_block: { type: "tool_use", id: tc.id, name: tc.function.name, input: {} } })}\n\n`);
+			res.write(`event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", index: contentIndex, delta: { type: "input_json_delta", partial_json: JSON.stringify(parsedInput) } })}\n\n`);
+			res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: contentIndex })}\n\n`);
+			contentIndex++;
+		}
+	}
+	const stopReason = hasToolUse ? "tool_use" : "end_turn";
 	// message_delta: include both input_tokens and output_tokens so hermes shows full context count
-	res.write(`event: message_delta\ndata: ${JSON.stringify({ type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { input_tokens: completion.inputTokens, output_tokens: completion.outputTokens } })}\n\n`);
+	res.write(`event: message_delta\ndata: ${JSON.stringify({ type: "message_delta", delta: { stop_reason: stopReason, stop_sequence: null }, usage: { input_tokens: completion.inputTokens, output_tokens: completion.outputTokens } })}\n\n`);
 	res.write(`event: message_stop\ndata: ${JSON.stringify({ type: "message_stop" })}\n\n`);
 	res.end();
 }
@@ -1448,6 +1559,8 @@ async function streamCompatSse(
 
 	let anthropicActiveBlockIndex = -1;
 	let anthropicActiveBlockType: "thinking" | "text" | null = null;
+	let anthropicHasToolUse = false;
+	const anthropicToolCalls: OpenAIToolCall[] = [];
 
 	res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no" });
 
@@ -1539,6 +1652,20 @@ async function streamCompatSse(
 								}
 								if (format === "openai") {
 									res.write(`data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { tool_calls: [{ index: toolCallIndex - 1, id: callId, type: "function", function: { name, arguments: args } }] }, finish_reason: null }] })}\n\n`);
+								} else {
+									// Close any active text/thinking block before emitting tool_use
+									if (anthropicActiveBlockType !== null) {
+										res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: anthropicActiveBlockIndex })}\n\n`);
+										anthropicActiveBlockType = null;
+									}
+									anthropicActiveBlockIndex++;
+									anthropicHasToolUse = true;
+									anthropicToolCalls.push({ id: callId, type: "function", function: { name, arguments: args } });
+									let parsedInput: unknown;
+									try { parsedInput = JSON.parse(args); } catch { parsedInput = {}; }
+									res.write(`event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index: anthropicActiveBlockIndex, content_block: { type: "tool_use", id: callId, name, input: {} } })}\n\n`);
+									res.write(`event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", index: anthropicActiveBlockIndex, delta: { type: "input_json_delta", partial_json: JSON.stringify(parsedInput) } })}\n\n`);
+									res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: anthropicActiveBlockIndex })}\n\n`);
 								}
 							}
 						}
@@ -1571,14 +1698,15 @@ async function streamCompatSse(
 			if (anthropicActiveBlockType !== null) {
 				res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: anthropicActiveBlockIndex })}\n\n`);
 			}
+			const anthropicStopReason = anthropicHasToolUse ? "tool_use" : "end_turn";
 			// message_delta carries output_tokens; also include input_tokens so Hermes shows full context count
-			res.write(`event: message_delta\ndata: ${JSON.stringify({ type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { input_tokens: inputTokens, output_tokens: outputTokens } })}\n\n`);
+			res.write(`event: message_delta\ndata: ${JSON.stringify({ type: "message_delta", delta: { stop_reason: anthropicStopReason, stop_sequence: null }, usage: { input_tokens: inputTokens, output_tokens: outputTokens } })}\n\n`);
 			res.write(`event: message_stop\ndata: ${JSON.stringify({ type: "message_stop" })}\n\n`);
 		}
 		res.end();
 	}
 
-	return { text, inputTokens, outputTokens, responseId, toolCalls: undefined };
+	return { text, inputTokens, outputTokens, responseId, toolCalls: anthropicToolCalls.length > 0 ? anthropicToolCalls : undefined };
 }
 
 async function streamResponsesSse(
@@ -2122,18 +2250,28 @@ export async function handleAnthropicMessages(req: IncomingMessage, res: ServerR
 	if (result.streamed) {
 		return;
 	}
+	const contentBlocks: Array<Record<string, unknown>> = [];
+	if (result.completion.thinkingText) {
+		contentBlocks.push({ type: "thinking", thinking: result.completion.thinkingText });
+	}
+	if (result.completion.text) {
+		contentBlocks.push({ type: "text", text: result.completion.text });
+	}
+	if (result.completion.toolCalls && result.completion.toolCalls.length > 0) {
+		for (const tc of result.completion.toolCalls) {
+			let parsedInput: unknown;
+			try { parsedInput = JSON.parse(tc.function.arguments || "{}"); } catch { parsedInput = {}; }
+			contentBlocks.push({ type: "tool_use", id: tc.id, name: tc.function.name, input: parsedInput });
+		}
+	}
+	const stopReason = (result.completion.toolCalls && result.completion.toolCalls.length > 0) ? "tool_use" : "end_turn";
 	writeJson(res, 200, {
 		id: `msg_${started.toString(36)}`,
 		type: "message",
 		role: "assistant",
 		model: validation.value.model,
-		content: result.completion.thinkingText
-			? [
-				{ type: "thinking", thinking: result.completion.thinkingText },
-				{ type: "text", text: result.completion.text }
-			]
-			: [{ type: "text", text: result.completion.text }],
-		stop_reason: "end_turn",
+		content: contentBlocks,
+		stop_reason: stopReason,
 		stop_sequence: null,
 		usage: {
 			input_tokens: result.completion.inputTokens,
