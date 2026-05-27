@@ -168,4 +168,38 @@ data: [DONE]
 		const request = result.request as any;
 		assert.match(JSON.stringify(request.contents), /Context: The assistant used tools/);
 	});
+
+	it("collapses anyOf/oneOf/allOf to first variant for Claude model schemas", () => {
+		const req: OpenAIChatCompletionRequest = {
+			model: "claude-sonnet-4-6",
+			messages: [{ role: "user", content: "Hi" }],
+			tools: [
+				{
+					type: "function",
+					function: {
+						name: "test_tool",
+						parameters: {
+							type: "object",
+							properties: {
+								value: {
+									anyOf: [
+										{ type: "string", minLength: 3 },
+										{ type: "number" }
+									]
+								}
+							}
+						}
+					}
+				}
+			]
+		};
+
+		const result = openAIToAntigravityBody(req);
+		const request = result.request as any;
+		const valueParam = request.tools[0].functionDeclarations[0].parameters.properties.value;
+		assert.strictEqual(valueParam.type, "string");
+		assert.strictEqual(valueParam.minLength, 3);
+		assert.strictEqual(valueParam.anyOf, undefined);
+	});
 });
+
