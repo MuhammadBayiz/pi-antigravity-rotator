@@ -1682,6 +1682,7 @@ async function streamCompatSse(
 	const created = Math.floor(Date.now() / 1000);
 	const id = format === "openai" ? `chatcmpl-${Date.now().toString(36)}` : `msg_${Date.now().toString(36)}`;
 
+	const openaiToolCalls: OpenAIToolCall[] = [];
 	let anthropicActiveBlockIndex = -1;
 	let anthropicActiveBlockType: "thinking" | "text" | null = null;
 	let anthropicHasToolUse = false;
@@ -1776,6 +1777,7 @@ async function streamCompatSse(
 									cacheThoughtSignature(callId, part.thoughtSignature);
 								}
 								if (format === "openai") {
+									openaiToolCalls.push({ id: callId, type: "function", function: { name, arguments: args } });
 									res.write(`data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { tool_calls: [{ index: toolCallIndex - 1, id: callId, type: "function", function: { name, arguments: args } }] }, finish_reason: null }] })}\n\n`);
 								} else {
 									// Close any active text/thinking block before emitting tool_use
@@ -1813,7 +1815,8 @@ async function streamCompatSse(
 
 	if (!reqClosed && !res.writableEnded) {
 		if (format === "openai") {
-			res.write(`data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\n`);
+			const openaiFinishReason = toolCallIndex > 0 ? "tool_calls" : "stop";
+			res.write(`data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: {}, finish_reason: openaiFinishReason }] })}\n\n`);
 			// Emit a usage chunk so agents (hermes, openwebui, etc.) can display token statistics
 			if (inputTokens > 0 || outputTokens > 0) {
 				res.write(`data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [], usage: { prompt_tokens: inputTokens, completion_tokens: outputTokens, total_tokens: inputTokens + outputTokens } })}\n\n`);
@@ -1831,7 +1834,8 @@ async function streamCompatSse(
 		res.end();
 	}
 
-	return { text, inputTokens, outputTokens, responseId, toolCalls: anthropicToolCalls.length > 0 ? anthropicToolCalls : undefined };
+	const collectedToolCalls = openaiToolCalls.length > 0 ? openaiToolCalls : anthropicToolCalls.length > 0 ? anthropicToolCalls : undefined;
+	return { text, inputTokens, outputTokens, responseId, toolCalls: collectedToolCalls };
 }
 
 async function streamResponsesSse(
