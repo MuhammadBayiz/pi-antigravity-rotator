@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [2.1.6] - 2026-06-12
+
+### Fixed
+- **Streaming tool calls finish reason**: Fixed an issue where `streamCompatSse` emitted `finish_reason: "stop"` instead of `"tool_calls"` when function calls were streamed to the client via OpenAI compatibility layer. This resolves compatibility issues with clients like ZED editor that discard pending tool executions as canceled when receiving "stop".
+
 ## [2.1.5] - 2026-05-27
 
 ### Fixed
