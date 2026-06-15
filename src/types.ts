@@ -320,6 +320,10 @@ export interface AccountStatus {
 	activeForModels: string[];
 	requestsSinceRotation: number;
 	totalRequests: number;
+	dailyRequestCount: number;
+	dailyAccountStopRequests: number;
+	dailyProjectRequestCount: number;
+	dailyProjectStopRequests: number;
 	cooldownsByModel: Record<string, number>;
 	lastUsed: number;
 	lastError: string | null;
