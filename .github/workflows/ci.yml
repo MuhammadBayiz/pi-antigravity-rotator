@@ -28,3 +28,14 @@ jobs:
 
       - name: Run typecheck, tests, and lint
         run: npm run check
+
+      - name: Run coverage
+        run: npm run coverage -- --check-coverage --lines=60 --branches=50 --functions=60 --statements=60
+
+      - name: Upload coverage to artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html
+          path: coverage/
+          retention-days: 14

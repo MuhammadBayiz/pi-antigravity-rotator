@@ -12,6 +12,7 @@ token-usage.json
 .first-boot
 .star-prompted
 .admin-token
+coverage/
 docker-data/
 ROADMAP.md
 
