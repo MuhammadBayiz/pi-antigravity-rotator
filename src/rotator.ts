@@ -86,6 +86,13 @@ export class AccountRotator {
 	private static readonly STATE_SAVE_DEBOUNCE_MS = 1_000;
 	private stateSaveInflight = false;
 	private stateSavePending = false;
+	// Debounced token-usage writer: same pattern as state. Debounce window is
+	// longer (2s) because token-usage writes include the minute/hour/day
+	// consolidation pass and the JSON can be tens of KB.
+	private tokenUsageSaveTimer: ReturnType<typeof setTimeout> | null = null;
+	private static readonly TOKEN_USAGE_SAVE_DEBOUNCE_MS = 2_000;
+	private tokenUsageSaveInflight = false;
+	private tokenUsageSavePending = false;
 
 	constructor(private config: Config) {
 		this.config = applyConfigDefaults(config);
@@ -1229,7 +1236,7 @@ export class AccountRotator {
 
 		// Lazy consolidation
 		this.consolidateTokenBuckets(now);
-		this.saveTokenUsage();
+		this.scheduleTokenUsageSave();
 	}
 
 	recordLatency(model: string | undefined, ttfbMs: number, totalMs: number): void {
@@ -1394,6 +1401,50 @@ export class AccountRotator {
 		try {
 			writeJsonFileAtomic(TOKENS_FILE, this.tokenBuckets);
 		} catch { /* best effort */ }
+	}
+
+	/**
+	 * Schedule a debounced token-usage save. Same coalescing pattern as
+	 * scheduleStateSave: multiple calls within TOKEN_USAGE_SAVE_DEBOUNCE_MS
+	 * collapse into a single write. recordTokenUsage() calls this instead of
+	 * saveTokenUsage() to avoid blocking the event loop on every request.
+	 */
+	scheduleTokenUsageSave(): void {
+		if (this.tokenUsageSaveTimer) return;
+		this.tokenUsageSaveTimer = setTimeout(() => {
+			this.tokenUsageSaveTimer = null;
+			void this.runScheduledTokenUsageSave();
+		}, AccountRotator.TOKEN_USAGE_SAVE_DEBOUNCE_MS);
+		if (this.tokenUsageSaveTimer.unref) this.tokenUsageSaveTimer.unref();
+	}
+
+	private async runScheduledTokenUsageSave(): Promise<void> {
+		if (this.tokenUsageSaveInflight) {
+			this.tokenUsageSavePending = true;
+			return;
+		}
+		this.tokenUsageSaveInflight = true;
+		try {
+			this.saveTokenUsage();
+		} finally {
+			this.tokenUsageSaveInflight = false;
+			if (this.tokenUsageSavePending) {
+				this.tokenUsageSavePending = false;
+				this.scheduleTokenUsageSave();
+			}
+		}
+	}
+
+	/**
+	 * Force-flush any pending token-usage write. Called by SIGTERM/SIGINT in
+	 * index.ts to minimise data loss on shutdown.
+	 */
+	flushPendingTokenUsageSaveSync(): void {
+		if (this.tokenUsageSaveTimer) {
+			clearTimeout(this.tokenUsageSaveTimer);
+			this.tokenUsageSaveTimer = null;
+		}
+		this.saveTokenUsage();
 	}
 
 	getTokenUsage(): TokenUsageData {

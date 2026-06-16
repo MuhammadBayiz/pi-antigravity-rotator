@@ -167,6 +167,7 @@ export function main(): void {
 		console.log("\nShutting down...");
 		flushResponsesStoreSync();
 		rotator.flushPendingStateSaveSync();
+		rotator.flushPendingTokenUsageSaveSync();
 		await telemetry.shutdown();
 		rotator.stopQuotaPolling();
 		process.exit(0);
