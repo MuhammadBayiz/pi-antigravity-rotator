@@ -194,11 +194,81 @@ function isFetchTransportError(err: unknown): boolean {
 	return err instanceof TypeError && err.message === "fetch failed";
 }
 
-/** Extract token usage from SSE stream or JSON response body */
-function extractTokenUsage(buffer: string): { inputTokens: number; outputTokens: number } | null {
+/** Max bytes kept in the SSE event buffer. A single event is rarely >1MB;
+ *  if it is, we keep the last 1MB which is still enough to find usage. */
+const SSE_EVENT_BUFFER_MAX = 1024 * 1024;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Recursively search a parsed JSON value for the first usage block we recognise.
+ *  Supports Gemini (usageMetadata), OpenAI (usage with prompt_tokens/completion_tokens),
+ *  and Anthropic (usage with input_tokens/output_tokens). */
+function findUsageInJson(value: unknown): { inputTokens: number; outputTokens: number } | null {
+	if (!isRecord(value)) return null;
+	// Gemini format
+	const gemini = value.usageMetadata;
+	if (isRecord(gemini)) {
+		const input = typeof gemini.promptTokenCount === "number" ? gemini.promptTokenCount : 0;
+		const output = typeof gemini.candidatesTokenCount === "number" ? gemini.candidatesTokenCount : 0;
+		if (input > 0 || output > 0) return { inputTokens: input, outputTokens: output };
+	}
+	// OpenAI / Anthropic format
+	const usage = value.usage;
+	if (isRecord(usage)) {
+		const input = typeof usage.prompt_tokens === "number" ? usage.prompt_tokens
+			: typeof usage.input_tokens === "number" ? usage.input_tokens
+			: 0;
+		const output = typeof usage.completion_tokens === "number" ? usage.completion_tokens
+			: typeof usage.output_tokens === "number" ? usage.output_tokens
+			: 0;
+		if (input > 0 || output > 0) return { inputTokens: input, outputTokens: output };
+	}
+	// Recurse into common nesting locations.
+	for (const key of ["candidates", "output", "response", "message"]) {
+		const child = value[key];
+		if (Array.isArray(child)) {
+			for (const item of child) {
+				const found = findUsageInJson(item);
+				if (found) return found;
+			}
+		} else if (isRecord(child)) {
+			const found = findUsageInJson(child);
+			if (found) return found;
+		}
+	}
+	return null;
+}
+
+/** Extract usage from a single complete SSE event (one or more `data:` lines
+ *  separated by newlines, terminated by a blank line). The last successful
+ *  extraction wins (callers should stop scanning once they find usage). */
+export function extractUsageFromSseEvent(eventText: string): { inputTokens: number; outputTokens: number } | null {
+	const dataLines: string[] = [];
+	for (const raw of eventText.split("\n")) {
+		if (raw.startsWith("data:")) {
+			dataLines.push(raw.slice(5).trim());
+		}
+	}
+	if (dataLines.length === 0) return null;
+	const payload = dataLines.join("\n");
+	if (payload === "[DONE]" || payload === "") return null;
+	let parsed: unknown;
 	try {
-		// Look for usageMetadata/usage anywhere in the buffer via regex
-		// Handles both SSE `data: {...}` and raw JSON chunks
+		parsed = JSON.parse(payload);
+	} catch {
+		// Fall back to regex on the raw event text. This handles non-standard
+		// streams that don't quite produce valid JSON per event.
+		const fallback = regexExtractUsage(payload);
+		return fallback;
+	}
+	return findUsageInJson(parsed);
+}
+
+/** Last-resort regex extraction for streams that don't yield parseable JSON. */
+function regexExtractUsage(buffer: string): { inputTokens: number; outputTokens: number } | null {
+	try {
 		const patterns = [
 			/"promptTokenCount"\s*:\s*(\d+).*?"candidatesTokenCount"\s*:\s*(\d+)/s,
 			/"input_tokens"\s*:\s*(\d+).*?"output_tokens"\s*:\s*(\d+)/s,
@@ -216,8 +286,40 @@ function extractTokenUsage(buffer: string): { inputTokens: number; outputTokens:
 	return null;
 }
 
-// Keep last ~32KB of stream to find usage metadata in the final chunk
-const USAGE_TAIL_BYTES = 32 * 1024;
+/** State for the SSE event accumulator used by streamResponseBody. */
+class SseEventAccumulator {
+	private buffer = "";
+	private readonly maxBytes: number;
+	constructor(maxBytes: number = SSE_EVENT_BUFFER_MAX) {
+		this.maxBytes = maxBytes;
+	}
+
+	/** Append a chunk, return any usage extracted from newly-completed events. */
+	append(chunkText: string): { inputTokens: number; outputTokens: number } | null {
+		this.buffer += chunkText;
+		if (this.buffer.length > this.maxBytes) {
+			this.buffer = this.buffer.slice(-this.maxBytes);
+		}
+		let extracted: { inputTokens: number; outputTokens: number } | null = null;
+		let boundary = this.buffer.indexOf("\n\n");
+		while (boundary !== -1) {
+			const eventText = this.buffer.slice(0, boundary);
+			this.buffer = this.buffer.slice(boundary + 2);
+			const usage = extractUsageFromSseEvent(eventText);
+			if (usage && !extracted) extracted = usage;
+			boundary = this.buffer.indexOf("\n\n");
+		}
+		return extracted;
+	}
+
+	/** Flush any partial event at end-of-stream. */
+	final(): { inputTokens: number; outputTokens: number } | null {
+		if (!this.buffer) return null;
+		const usage = extractUsageFromSseEvent(this.buffer);
+		this.buffer = "";
+		return usage;
+	}
+}
 
 async function readJsonRequest(req: IncomingMessage): Promise<unknown> {
 	const body = await readLimitedBody(req);
@@ -234,7 +336,8 @@ async function streamResponseBody(
 	if (!body) return null;
 
 	const nodeStream = Readable.fromWeb(body as import("node:stream/web").ReadableStream);
-	let tailBuffer = "";
+	const eventAccumulator = new SseEventAccumulator();
+	let firstUsage: { inputTokens: number; outputTokens: number } | null = null;
 	const streamStartMs = Date.now();
 	let firstByteMs = 0;
 
@@ -258,8 +361,9 @@ async function streamResponseBody(
 			settled = true;
 			if (reason) proxyLog(`[${label}] Stream closed: ${reason}`, "warn");
 			cleanup();
-			const extracted = extractTokenUsage(tailBuffer);
-			resolve(extracted ? { ...extracted, firstByteMs } : null);
+			// Drain any partial event that didn't end with \n\n
+			if (!firstUsage) firstUsage = eventAccumulator.final();
+			resolve(firstUsage ? { ...firstUsage, firstByteMs } : null);
 		};
 
 		const resetIdleTimer = (): void => {
@@ -273,13 +377,14 @@ async function streamResponseBody(
 		const onData = (chunk: Buffer): void => {
 			if (firstByteMs === 0) firstByteMs = Date.now() - streamStartMs;
 			resetIdleTimer();
-			const str = chunk.toString();
-			tailBuffer += str;
-			if (tailBuffer.length > USAGE_TAIL_BYTES) {
-				tailBuffer = tailBuffer.slice(-USAGE_TAIL_BYTES);
-			}
+			// Forward to client immediately (real-time streaming preserved)
 			if (!res.destroyed && !res.writableEnded) {
 				res.write(chunk);
+			}
+			// Extract usage from any newly-completed SSE events
+			if (!firstUsage) {
+				const usage = eventAccumulator.append(chunk.toString());
+				if (usage) firstUsage = usage;
 			}
 		};
 		const onEnd = (): void => finish();
