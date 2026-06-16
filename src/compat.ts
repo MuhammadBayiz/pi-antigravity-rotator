@@ -151,13 +151,15 @@ interface StoredResponseEntry {
 
 // ---------------------------------------------------------------------------
 // Model-specific specs — mirrors Antigravity-Manager model_specs.json
+// Operators can override these via the `modelSpecs` field in accounts.json
+// by calling setModelSpecsOverride() at startup.
 // ---------------------------------------------------------------------------
-interface ModelSpec {
+export interface ModelSpec {
 	maxOutputTokens: number;
 	thinkingBudget: number; // -1 = adaptive (model decides), >=0 = fixed
 	isThinking: boolean;
 }
-const MODEL_SPECS: Record<string, ModelSpec> = {
+const DEFAULT_MODEL_SPECS: Record<string, ModelSpec> = {
 	"gemini-pro-agent":          { maxOutputTokens: 65535, thinkingBudget: 10001, isThinking: true },
 	"gemini-3-flash-agent":      { maxOutputTokens: 65536, thinkingBudget: 10000, isThinking: true },
 	"gemini-3-pro-high":         { maxOutputTokens: 65535, thinkingBudget: 10001, isThinking: true },
@@ -179,6 +181,20 @@ const MODEL_SPECS: Record<string, ModelSpec> = {
 	"gpt-oss-120b-medium":       { maxOutputTokens: 32768, thinkingBudget: 8192,  isThinking: true },
 	"gpt-oss-120b":              { maxOutputTokens: 32768, thinkingBudget: 8192,  isThinking: true },
 };
+let modelSpecsOverride: Record<string, ModelSpec> | null = null;
+
+/**
+ * Replace the bundled model spec table with operator-provided overrides.
+ * Pass `null` to restore defaults. Called once at startup from index.ts.
+ */
+export function setModelSpecsOverride(specs: Record<string, ModelSpec> | null): void {
+	modelSpecsOverride = specs && Object.keys(specs).length > 0 ? specs : null;
+}
+
+function getActiveModelSpecs(): Record<string, ModelSpec> {
+	return modelSpecsOverride ?? DEFAULT_MODEL_SPECS;
+}
+
 const GEMINI_MAX_OUTPUT_TOKENS = 65536;
 const CLAUDE_MAX_OUTPUT_TOKENS = 64000;
 const FALLBACK_THINKING_BUDGET = 24576;
@@ -192,9 +208,10 @@ function getModelFamily(model: string): "claude" | "gemini" | "unknown" {
 }
 
 function getModelSpec(model: string): ModelSpec {
+	const specs = getActiveModelSpecs();
 	const lower = model.toLowerCase();
-	if (MODEL_SPECS[lower]) return MODEL_SPECS[lower];
-	for (const [key, spec] of Object.entries(MODEL_SPECS)) {
+	if (specs[lower]) return specs[lower];
+	for (const [key, spec] of Object.entries(specs)) {
 		if (lower.includes(key)) return spec;
 	}
 	const family = getModelFamily(model);

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it, afterEach } from "node:test";
 import {
 	anthropicToAntigravityBody,
 	logValidationFailure,
@@ -9,6 +9,7 @@ import {
 	openAIToAntigravityBody,
 	parseAntigravitySse,
 	resetResponsesStoreForTests,
+	setModelSpecsOverride,
 	validateAnthropicMessagesRequest,
 	validateOpenAIChatCompletionRequest,
 	validateOpenAIResponsesRequest,
@@ -355,6 +356,48 @@ describe("logValidationFailure", () => {
 		} finally {
 			(logger as unknown as { writer: (line: string) => void }).writer = originalWriter;
 		}
+	});
+});
+
+describe("setModelSpecsOverride", () => {
+	afterEach(() => {
+		setModelSpecsOverride(null);
+	});
+
+	it("returns the same defaults for known model ids", () => {
+		const body = openAIToAntigravityBody({
+			model: "gemini-3.1-pro-high",
+			messages: [{ role: "user", content: "hello" }],
+		}) as { request: { generationConfig: { maxOutputTokens?: number; thinkingConfig?: { thinkingBudget?: number } } } };
+		// Without an override, the spec for gemini-3.1-pro-high uses
+		// thinkingBudget=10001 and maxOutputTokens=65535.
+		assert.equal(body.request.generationConfig.thinkingConfig?.thinkingBudget, 10001);
+	});
+
+	it("operator override replaces the bundled spec", () => {
+		setModelSpecsOverride({
+			"gemini-3.1-pro-high": { maxOutputTokens: 12345, thinkingBudget: 999, isThinking: true },
+		});
+		const body = openAIToAntigravityBody({
+			model: "gemini-3.1-pro-high",
+			messages: [{ role: "user", content: "hello" }],
+		}) as { request: { generationConfig: { maxOutputTokens?: number; thinkingConfig?: { thinkingBudget?: number } } } };
+		// thinkingBudget comes straight from the override; maxOutputTokens is capped
+		// at min(tb+8192, spec.maxOutputTokens) = min(9191, 12345) = 9191.
+		assert.equal(body.request.generationConfig.thinkingConfig?.thinkingBudget, 999);
+		assert.equal(body.request.generationConfig.maxOutputTokens, 9191);
+	});
+
+	it("passing null restores bundled defaults", () => {
+		setModelSpecsOverride({
+			"gemini-3.1-pro-high": { maxOutputTokens: 12345, thinkingBudget: 999, isThinking: true },
+		});
+		setModelSpecsOverride(null);
+		const body = openAIToAntigravityBody({
+			model: "gemini-3.1-pro-high",
+			messages: [{ role: "user", content: "hello" }],
+		}) as { request: { generationConfig: { maxOutputTokens?: number; thinkingConfig?: { thinkingBudget?: number } } } };
+		assert.equal(body.request.generationConfig.thinkingConfig?.thinkingBudget, 10001);
 	});
 });
 
