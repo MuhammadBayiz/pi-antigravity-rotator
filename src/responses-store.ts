@@ -39,6 +39,17 @@ function now(): number {
 	return Date.now();
 }
 
+/**
+ * Persistent in-memory store for OpenAI Responses API (Codex) chain state.
+ *
+ * Maps `response_id` to the conversation state needed to continue a previous
+ * turn via `previous_response_id`. Persists to <configDir>/responses.json
+ * with atomic writes (temp + rename). Writes are debounced to 1.5s and
+ * coalesced if a flush is already in flight. Stale entries (older than
+ * the 6h TTL) and entries over the 500-entry cap are pruned automatically.
+ *
+ * Corrupt files are moved aside to .corrupt-<ts>.bak on load().
+ */
 export class ResponsesStore {
 	private cache = new Map<string, StoredResponseEntry>();
 	private flushTimer: ReturnType<typeof setTimeout> | null = null;

@@ -92,6 +92,14 @@ const DEFAULT_MODEL_ALIASES: Record<string, string> = {
 };
 let modelAliasesOverride: Record<string, string> | null = null;
 
+/**
+ * Replace the bundled model-alias table with operator-provided overrides.
+ * Pass `null` to restore the defaults. Called once at startup from
+ * index.ts via `setModelAliasesOverride(config.modelAliases ?? null)`.
+ *
+ * @param aliases Map of operator-facing model name to upstream model name,
+ *                or null to restore defaults.
+ */
 export function setModelAliasesOverride(aliases: Record<string, string> | null): void {
 	modelAliasesOverride = aliases && Object.keys(aliases).length > 0 ? aliases : null;
 }
