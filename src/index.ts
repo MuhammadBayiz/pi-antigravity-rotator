@@ -10,6 +10,7 @@ import { TelemetryReporter, setActiveReporter } from "./telemetry.js";
 import { loadConfigFromDisk } from "./account-store.js";
 import { ensureAdminToken, getConfiguredAdminToken, setPersistedAdminToken } from "./admin-auth.js";
 import { warnIfUsingFallbackOAuthCreds } from "./oauth.js";
+import { warnIfInsecureTelemetryEndpoint } from "./telemetry.js";
 import { setModelSpecsOverride } from "./compat.js";
 import { writeTextFileAtomic } from "./storage.js";
 
@@ -131,6 +132,7 @@ export function main(): void {
 	bootstrapAdminToken(getConfigDir());
 	maybeWarnAboutAdminExposure(config);
 	warnIfUsingFallbackOAuthCreds();
+	warnIfInsecureTelemetryEndpoint();
 	setModelSpecsOverride(config.modelSpecs ?? null);
 
 	const rotator = new AccountRotator(config);
