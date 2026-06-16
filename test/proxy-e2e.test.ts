@@ -151,6 +151,57 @@ describe("proxy e2e: 200 happy path", () => {
 	});
 });
 
+describe("proxy e2e: hop-by-hop header stripping (S7)", () => {
+	it("removes X-Forwarded-For, Forwarded, Via, X-Real-IP and similar proxy headers", async () => {
+		const captures: Capture[] = [];
+		const upstream = await listen((req, res) => {
+			let body = "";
+			req.on("data", (chunk) => { body += chunk.toString(); });
+			req.on("end", () => {
+				captures.push({ url: req.url || "", headers: req.headers, body });
+				res.writeHead(200, { "Content-Type": "text/event-stream" });
+				res.end('data: {"candidates":[{"content":{"parts":[{"text":"ok"}]}}]}\n\n');
+			});
+		});
+		endpointOverrides.splice(0, endpointOverrides.length, upstream.url);
+
+		const rotator = makeRotator(makeAccount("hh@example.com"));
+		try {
+			// Headers that the proxy MUST strip. The "connection" header is
+			// added by fetch() itself, so we don't test it here (the proxy
+			// doesn't have it in forwardHeaders to delete).
+			const headers: Record<string, string> = {
+				"x-forwarded-for": "1.2.3.4",
+				"x-forwarded-host": "evil.example.com",
+				"x-forwarded-proto": "https",
+				"x-real-ip": "5.6.7.8",
+				"forwarded": "for=1.2.3.4",
+				"via": "1.1 evil-proxy",
+				"upgrade": "websocket",
+			};
+			const outcome = await withRotation(
+				rotator,
+				"gemini-3.1-pro",
+				headers,
+				makeBody(),
+				async () => "ok",
+			);
+			assert.equal(outcome.ok, true);
+			assert.equal(captures.length, 1);
+			const got = captures[0].headers;
+			assert.equal(got["x-forwarded-for"], undefined, "X-Forwarded-For must be stripped");
+			assert.equal(got["x-forwarded-host"], undefined, "X-Forwarded-Host must be stripped");
+			assert.equal(got["x-forwarded-proto"], undefined, "X-Forwarded-Proto must be stripped");
+			assert.equal(got["x-real-ip"], undefined, "X-Real-IP must be stripped");
+			assert.equal(got["forwarded"], undefined, "Forwarded must be stripped");
+			assert.equal(got["via"], undefined, "Via must be stripped");
+			assert.equal(got["upgrade"], undefined, "Upgrade must be stripped");
+		} finally {
+			await upstream.close();
+		}
+	});
+});
+
 describe("proxy e2e: 429 rate-limited", () => {
 	it("marks the account exhausted and returns 429 to the caller with cooldown", async () => {
 		const upstream = await listen((req, res) => {

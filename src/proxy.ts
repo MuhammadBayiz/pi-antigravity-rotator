@@ -450,10 +450,32 @@ export async function forwardRequest(
 		"Content-Type": "application/json",
 		Accept: "text/event-stream",
 	};
-	// Remove original authorization (any case) and hop-by-hop headers
+	// Remove original authorization (any case), provider-set headers, and
+	// hop-by-hop headers per RFC 7230 §6.1. The hop-by-hop list prevents
+	// leaking client IP (X-Forwarded-For) and prevents IP spoofing in
+	// upstream logs (Via).
+	const HOP_BY_HOP = new Set([
+		"connection",
+		"keep-alive",
+		"proxy-authenticate",
+		"proxy-authorization",
+		"te",
+		"trailers",
+		"transfer-encoding",
+		"upgrade",
+		// Forwarding / proxying artefacts that should never reach the upstream
+		"x-forwarded-for",
+		"x-forwarded-host",
+		"x-forwarded-proto",
+		"x-forwarded-port",
+		"x-real-ip",
+		"forwarded",
+		"via",
+	]);
 	for (const key of Object.keys(forwardHeaders)) {
 		const lowerKey = key.toLowerCase();
 		if (
+			HOP_BY_HOP.has(lowerKey) ||
 			lowerKey === "authorization" ||
 			lowerKey === "user-agent" ||
 			lowerKey === "x-goog-api-client" ||
