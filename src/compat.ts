@@ -826,12 +826,13 @@ function messagesFromAntigravityRequest(value: Record<string, unknown>): ChatMes
 
 export function normalizeOpenAIChatCompletionRequest(value: unknown): unknown {
 	if (!isRecord(value) || Array.isArray(value.messages)) return value;
-	let messages: ChatMessage[] | null = null;
-	if ("messages" in value) messages = messagesFromLooseMessages(value.messages);
-	else if (typeof value.prompt === "string") messages = [{ role: "user", content: value.prompt }];
-	else if (Array.isArray(value.prompt)) messages = messagesFromResponsesInput(value.prompt) ?? value.prompt.map((prompt) => ({ role: "user", content: String(prompt) }));
-	else if ("input" in value) messages = messagesFromResponsesInput(value.input);
-	else messages = messagesFromAntigravityRequest(value);
+	const messages = (() => {
+		if ("messages" in value) return messagesFromLooseMessages(value.messages);
+		if (typeof value.prompt === "string") return [{ role: "user", content: value.prompt }];
+		if (Array.isArray(value.prompt)) return messagesFromResponsesInput(value.prompt) ?? value.prompt.map((prompt) => ({ role: "user", content: String(prompt) }));
+		if ("input" in value) return messagesFromResponsesInput(value.input);
+		return messagesFromAntigravityRequest(value);
+	})();
 	return messages ? { ...value, messages } : value;
 }
 
@@ -1345,7 +1346,7 @@ export function openAIToAntigravityBody(input: OpenAIChatCompletionRequest): Req
 	if (geminiTools.length > 0) request.tools = geminiTools;
 	if (geminiToolConfig) request.toolConfig = geminiToolConfig;
 
-	let mappedModel = applyModelAlias(input.model);
+	const mappedModel = applyModelAlias(input.model);
 
 	return {
 		project: "compat-placeholder",
@@ -1683,7 +1684,7 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
 		return JSON.parse(body.toString("utf-8"));
 	} catch (err) {
 		if (err instanceof PayloadTooLargeError) throw err;
-		throw new Error("Invalid JSON body");
+		throw new Error("Invalid JSON body", { cause: err });
 	}
 }
 

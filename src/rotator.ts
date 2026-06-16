@@ -1782,7 +1782,7 @@ export class AccountRotator {
 			}
 			const msg = `Token refresh error: ${err instanceof Error ? err.message : String(err)}`;
 			this.markError(account, msg);
-			throw new Error(msg);
+			throw new Error(msg, { cause: err });
 		}
 	}
 
