@@ -11,6 +11,7 @@ token-usage.json
 .telemetry-id
 .first-boot
 .star-prompted
+.admin-token
 docker-data/
 ROADMAP.md
 

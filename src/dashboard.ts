@@ -10,19 +10,19 @@ export function serveDashboard(res: ServerResponse): void {
 }
 
 export function serveStatusApi(res: ServerResponse, rotator: AccountRotator): void {
-  res.writeHead(200, {
-    "Content-Type": "application/json",
-    "Access-Control-Allow-Origin": "*",
-  });
-  res.end(JSON.stringify(rotator.getStatus()));
+	res.writeHead(200, {
+		"Content-Type": "application/json",
+		"Cache-Control": "no-store",
+	});
+	res.end(JSON.stringify(rotator.getStatus()));
 }
 
 export function serveConfigApi(res: ServerResponse, rotator: AccountRotator): void {
-  res.writeHead(200, {
-    "Content-Type": "application/json",
-    "Access-Control-Allow-Origin": "*",
-  });
-  res.end(JSON.stringify(rotator.getConfig()));
+	res.writeHead(200, {
+		"Content-Type": "application/json",
+		"Cache-Control": "no-store",
+	});
+	res.end(JSON.stringify(rotator.getConfig()));
 }
 
 export function serveConfigExportApi(res: ServerResponse, rotator: AccountRotator): void {

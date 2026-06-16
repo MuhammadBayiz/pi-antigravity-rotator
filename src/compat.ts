@@ -1,13 +1,23 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import { PayloadTooLargeError, readLimitedBody } from "./body-limit.js";
-import { logger } from "./logger.js";
+import { logger, redactSensitive } from "./logger.js";
 import type { AccountRotator } from "./rotator.js";
 import { resolveQuotaModelKey } from "./types.js";
 import { withRotation, flattenHeaders, type RequestBody } from "./proxy.js";
 
 
 const compatLogger = logger.child("compat");
+
+const VALIDATION_LOG_MAX_CHARS = 200;
+
+export function logValidationFailure(scope: string, payload: unknown): void {
+	const truncated = redactSensitive(JSON.stringify(payload));
+	const clipped = truncated.length > VALIDATION_LOG_MAX_CHARS
+		? `${truncated.slice(0, VALIDATION_LOG_MAX_CHARS)}…[+${truncated.length - VALIDATION_LOG_MAX_CHARS} chars]`
+		: truncated;
+	compatLogger.warn(`${scope}: ${clipped}`);
+}
 
 export interface ChatMessage {
 	role: "system" | "developer" | "user" | "assistant" | "model" | "tool";
@@ -897,7 +907,7 @@ export function validateOpenAIChatCompletionRequest(value: unknown): { ok: true;
 	const errors: string[] = [];
 	if (!isNonEmptyString(value.model)) errors.push("body.model must be a non-empty string");
 	if (!validateMessages(value.messages)) {
-		compatLogger.warn(`OpenAI messages validation failed: ${JSON.stringify(value.messages)}`);
+		logValidationFailure("OpenAI messages validation failed", value.messages);
 		errors.push("body.messages must be an array of chat messages");
 	}
 	if (value.stream !== undefined && typeof value.stream !== "boolean") errors.push("body.stream must be boolean when provided");
@@ -1810,7 +1820,7 @@ async function streamCompatSse(
 			}
 		}
 	} catch (err) {
-		compatLogger.warn(`Stream read error: ${err}`);
+				compatLogger.warn(`Stream read error: ${redactSensitive(String(err)).slice(0, 200)}`);
 	}
 
 	if (!reqClosed && !res.writableEnded) {
@@ -1988,7 +1998,7 @@ async function streamResponsesSse(
 			}
 		}
 	} catch (err) {
-		compatLogger.warn(`Responses stream read error: ${err}`);
+			compatLogger.warn(`Responses stream read error: ${redactSensitive(String(err)).slice(0, 200)}`);
 	}
 
 	const completion: CompatCompletion = {

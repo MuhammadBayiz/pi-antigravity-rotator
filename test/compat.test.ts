@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
 	anthropicToAntigravityBody,
+	logValidationFailure,
 	normalizeOpenAIResponsesRequest,
 	normalizeAnthropicMessagesRequest,
 	normalizeOpenAIChatCompletionRequest,
@@ -12,6 +13,7 @@ import {
 	validateOpenAIChatCompletionRequest,
 	validateOpenAIResponsesRequest,
 } from "../src/compat.js";
+import { logger } from "../src/logger.js";
 
 describe("compat adapters", () => {
 	it("normalizes OpenAI Responses prompt into input", () => {
@@ -316,6 +318,43 @@ describe("compat adapters", () => {
 		// Check that the tool call and response are correctly structured
 		assert.match(reqStr, /"functionCall":\{"id":"tool_call_xyz","name":"lookup","args":\{"q":"pi"\}\}/);
 		assert.match(reqStr, /"functionResponse":\{"id":"tool_call_xyz","name":"lookup","response":\{"value":"3\.14159"\}|\{"content":"3\.14159"\}|\{"text":"3\.14159"\}|3\.14159\}/);
+	});
+});
+
+describe("logValidationFailure", () => {
+	it("truncates large payloads to 200 chars and redacts secrets", () => {
+		const lines: string[] = [];
+		const originalWriter = (logger as unknown as { writer: (line: string) => void }).writer;
+		(logger as unknown as { writer: (line: string) => void }).writer = (line) => lines.push(line);
+		try {
+			const hugePayload = {
+				text: "Bearer abc.def.ghi",
+				access_token: "ya29.VERYLONGSECRET",
+				content: "x".repeat(500),
+			};
+			logValidationFailure("Test scope", hugePayload);
+			assert.equal(lines.length, 1);
+			const line = lines[0];
+			assert.match(line, /Test scope:/);
+			assert.match(line, /\[REDACTED\]/);
+			assert.match(line, /\[\+\d+ chars\]/);
+			assert.ok(line.length < 400, `expected truncated line, got ${line.length} chars`);
+		} finally {
+			(logger as unknown as { writer: (line: string) => void }).writer = originalWriter;
+		}
+	});
+
+	it("does not truncate small payloads", () => {
+		const lines: string[] = [];
+		const originalWriter = (logger as unknown as { writer: (line: string) => void }).writer;
+		(logger as unknown as { writer: (line: string) => void }).writer = (line) => lines.push(line);
+		try {
+			logValidationFailure("Small", { ok: false });
+			assert.equal(lines.length, 1);
+			assert.doesNotMatch(lines[0], /\[\+\d+ chars\]/);
+		} finally {
+			(logger as unknown as { writer: (line: string) => void }).writer = originalWriter;
+		}
 	});
 });
 
