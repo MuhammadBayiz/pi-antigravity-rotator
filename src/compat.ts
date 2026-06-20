@@ -1150,19 +1150,37 @@ export function openAIToAntigravityBody(input: OpenAIChatCompletionRequest): Req
 	for (let i = 0; i < conversationMessages.length; i++) {
 		const msg = conversationMessages[i];
 		if (msg.role === "assistant" || msg.role === "model") {
+			// Strip dangling tool calls that do not have corresponding tool results (e.g. if some or all tool calls were cancelled/failed)
+			let msgToolCalls = msg.tool_calls;
+			if (Array.isArray(msgToolCalls) && msgToolCalls.length > 0) {
+				const completedToolCallIds = new Set<string>();
+				let j = i + 1;
+				while (j < conversationMessages.length && conversationMessages[j].role === "tool") {
+					const toolCallId = conversationMessages[j].tool_call_id;
+					if (typeof toolCallId === "string") {
+						completedToolCallIds.add(toolCallId);
+					}
+					j++;
+				}
+				msgToolCalls = msgToolCalls.filter((tc) => tc.id && completedToolCallIds.has(tc.id));
+				if (msgToolCalls.length === 0) {
+					msgToolCalls = undefined;
+				}
+			}
+
 			// Check if this is a thinking model turn with tool calls that have no cached signatures.
 			// If so, we collapse the tool exchange into a neutral user summary instead of
 			// injecting [Tool call: ...] text that the model will learn to mimic.
 			const hasMissingSig =
 				isGeminiThinking &&
-				Array.isArray(msg.tool_calls) &&
-				msg.tool_calls.length > 0 &&
-				!thoughtSignatureCache.has(msg.tool_calls[0].id);
+				Array.isArray(msgToolCalls) &&
+				msgToolCalls.length > 0 &&
+				!thoughtSignatureCache.has(msgToolCalls[0].id);
 
 			if (hasMissingSig) {
 				// Build a summary of what the model did and what results came back.
 				// We collect the paired tool result(s) from the immediately following messages.
-				const toolNames = msg.tool_calls!.map((tc) => tc.function.name).join(", ");
+				const toolNames = msgToolCalls!.map((tc) => tc.function.name).join(", ");
 				const resultParts: string[] = [];
 				while (i + 1 < conversationMessages.length && conversationMessages[i + 1].role === "tool") {
 					i++;
@@ -1182,13 +1200,13 @@ export function openAIToAntigravityBody(input: OpenAIChatCompletionRequest): Req
 				const textContent = typeof msg.content === "string" ? msg.content : extractText(msg.content);
 				if (textContent) parts.push({ text: textContent });
 			}
-			if (Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
+			if (Array.isArray(msgToolCalls) && msgToolCalls.length > 0) {
 				// Use native Gemini functionCall parts. Re-inject thought_signature from
 				// the server-side cache if available. Google only validates signatures on
 				// the *current turn* (after the last real user text message), so missing
 				// signatures on older historical turns are silently ignored.
 				let isFirstInMessage = true;
-				for (const tc of msg.tool_calls) {
+				for (const tc of msgToolCalls) {
 					let args: unknown;
 					try {
 						args = typeof tc.function.arguments === "string" ? JSON.parse(tc.function.arguments) : tc.function.arguments;
@@ -1204,6 +1222,9 @@ export function openAIToAntigravityBody(input: OpenAIChatCompletionRequest): Req
 					});
 					isFirstInMessage = false;
 				}
+			}
+			if (parts.length === 0) {
+				parts.push({ text: "..." });
 			}
 			if (parts.length > 0) {
 				// For Claude: handle two scenarios that break tool_use/tool_result ordering.
@@ -1247,16 +1268,40 @@ export function openAIToAntigravityBody(input: OpenAIChatCompletionRequest): Req
 					? parsed
 					: { output: parsed };
 			} catch { responseData = { output: responseText }; }
+			// Extract any images present in the tool result content
+			const toolImages: AntigravityPart[] = [];
+			if (msg.content && Array.isArray(msg.content)) {
+				for (const part of msg.content) {
+					if (part.type === "image_url" && isRecord(part.image_url) && typeof part.image_url.url === "string") {
+						const inlineData = dataUrlToInlineData(part.image_url.url);
+						if (inlineData) toolImages.push(inlineData);
+					} else if (part.type === "image" && isRecord(part.source) && typeof part.source.data === "string") {
+						const mediaType = typeof part.source.media_type === "string" ? part.source.media_type : "image/png";
+						toolImages.push({ inlineData: { mimeType: mediaType, data: part.source.data } });
+					}
+				}
+			}
+
 			// Include id only for Claude — Gemini native models reject the id field in functionResponse
 			const fnResponsePart = { functionResponse: { ...(isClaude && toolCallId ? { id: toolCallId } : {}), name: fnName, response: responseData } };
 			// Merge consecutive tool results into a single user turn.
 			// Claude (via Vertex) requires ALL tool_result blocks in one message
 			// directly after the assistant message with tool_use blocks.
+			// Crucially, all tool_result (functionResponse) parts must appear before
+			// any other part types (such as inlineData images) in the parts array.
 			const lastContent = contents[contents.length - 1];
 			if (lastContent && lastContent.role === "user" && Array.isArray(lastContent.parts) && lastContent.parts.length > 0 && isRecord(lastContent.parts[0] as any) && (lastContent.parts[0] as any).functionResponse !== undefined) {
-				lastContent.parts.push(fnResponsePart);
+				const firstNonFnIdx = lastContent.parts.findIndex((p: any) => !isRecord(p) || p.functionResponse === undefined);
+				if (firstNonFnIdx === -1) {
+					lastContent.parts.push(fnResponsePart);
+				} else {
+					lastContent.parts.splice(firstNonFnIdx, 0, fnResponsePart);
+				}
+				if (toolImages.length > 0) {
+					lastContent.parts.push(...toolImages);
+				}
 			} else {
-				contents.push({ role: "user", parts: [fnResponsePart] });
+				contents.push({ role: "user", parts: [fnResponsePart, ...toolImages] });
 			}
 		} else {
 			// user message
