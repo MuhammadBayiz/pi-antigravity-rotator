@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [2.2.1] - 2026-06-20
+
+### Fixed
+- **Support tool response images**: Extracted any image content (`image_url` or `image` formats) from OpenAI tool response content and mapped them to Antigravity `inlineData` parts.
+- **Ordered tool results**: Guaranteed all tool results remain clustered at the top of the parts array, complying with Claude's strict layout requirements.
+- **Dangling tool call filtering**: Filtered out any `tool_calls` that do not have a matching `tool_result` in the subsequent message to prevent `400 Bad Request`.
+- **Inline JSON-Schema union types**: Collapsed Draft-2020-12 inline union type arrays (e.g. `type: ["number", "null"]`) to the first non-null type and lifted nullability into the proto-supported `nullable` flag to fix 400 errors.
+
 ## [2.2.0] - 2026-06-16
 
 ### Security
