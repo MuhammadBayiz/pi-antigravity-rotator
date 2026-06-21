@@ -1,19 +1,11 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync, chmodSync } from "node:fs";
-import { join } from "node:path";
-import {
-  isDbConfigured,
-  getCachedAdminToken,
-  setCachedAdminToken,
-} from "./db-store.js";
+import { getCachedAdminToken, setCachedAdminToken } from "./db-store.js";
 
 interface AdminAuthRequest {
   url?: string;
   headers: IncomingMessage["headers"];
 }
-
-const ADMIN_TOKEN_FILENAME = ".admin-token";
 
 let persistedToken: string | null = null;
 
@@ -42,52 +34,28 @@ export function generateAdminToken(): string {
   return randomBytes(32).toString("hex");
 }
 
-export function readPersistedAdminToken(configDir: string): string | null {
-  if (isDbConfigured()) {
-    return getCachedAdminToken();
-  }
-  const tokenPath = join(configDir, ADMIN_TOKEN_FILENAME);
-  if (!existsSync(tokenPath)) return null;
-  try {
-    const raw = readFileSync(tokenPath, "utf-8").trim();
-    return raw ? raw : null;
-  } catch {
-    return null;
-  }
+export function readPersistedAdminToken(): string | null {
+  return getCachedAdminToken();
 }
 
-export function writePersistedAdminToken(
-  configDir: string,
-  token: string,
-): void {
-  if (isDbConfigured()) {
-    setCachedAdminToken(token);
-    return;
-  }
-  const tokenPath = join(configDir, ADMIN_TOKEN_FILENAME);
-  writeFileSync(tokenPath, token, { mode: 0o600, encoding: "utf-8" });
-  try {
-    chmodSync(tokenPath, 0o600);
-  } catch {
-    // Best effort: some filesystems (e.g. Windows) don't support POSIX perms.
-  }
+export function writePersistedAdminToken(token: string): void {
+  setCachedAdminToken(token);
 }
 
 export interface ResolvedAdminToken {
   token: string;
-  source: "env" | "file" | "generated";
+  source: "env" | "repository" | "generated";
   generated: boolean;
 }
 
 /**
  * Resolve the effective admin token, generating and persisting one if needed.
- * Priority: PI_ROTATOR_ADMIN_TOKEN env var > .admin-token file > generate new.
+ * Priority: PI_ROTATOR_ADMIN_TOKEN env var > repository > generate new.
  *
- * When a token is generated, it is persisted to .admin-token with 0600 perms
- * and returned. The caller is responsible for printing it to the operator.
+ * When a token is generated, it is persisted to the repository and returned.
+ * The caller is responsible for printing it to the operator.
  */
 export function ensureAdminToken(
-  configDir: string,
   env: NodeJS.ProcessEnv = process.env,
 ): ResolvedAdminToken {
   const envToken = env.PI_ROTATOR_ADMIN_TOKEN?.trim();
@@ -95,16 +63,16 @@ export function ensureAdminToken(
     return { token: envToken, source: "env", generated: false };
   }
 
-  const fileToken = readPersistedAdminToken(configDir);
-  if (fileToken) {
-    return { token: fileToken, source: "file", generated: false };
+  const existing = readPersistedAdminToken();
+  if (existing) {
+    return { token: existing, source: "repository", generated: false };
   }
 
   const newToken = generateAdminToken();
   try {
-    writePersistedAdminToken(configDir, newToken);
+    writePersistedAdminToken(newToken);
   } catch {
-    // If we cannot write the file (read-only fs, perms), still return the
+    // If we cannot persist (e.g. DB down, read-only fs), still return the
     // token for this session. The next restart will simply generate again.
   }
   return { token: newToken, source: "generated", generated: true };

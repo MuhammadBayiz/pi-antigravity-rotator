@@ -22,27 +22,9 @@ import {
 } from "./compat.js";
 import { setModelAliasesOverride } from "./types.js";
 import { writeTextFileAtomic } from "./storage.js";
-import { initDb, isDbConfigured } from "./db-store.js";
+import { initDb } from "./db-store.js";
 
 function loadConfig(): Config {
-  if (isDbConfigured()) {
-    try {
-      return loadConfigFromDisk();
-    } catch (err) {
-      console.error(`Failed to load config: ${err}`);
-      process.exit(1);
-    }
-  }
-
-  const configPath = join(getConfigDir(), "accounts.json");
-  if (!existsSync(configPath)) {
-    console.error(`Config not found: ${configPath}`);
-    console.error(
-      "Run 'pi-antigravity-rotator login' to add your first account.",
-    );
-    process.exit(1);
-  }
-
   try {
     const config = loadConfigFromDisk();
 
@@ -55,7 +37,7 @@ function loadConfig(): Config {
 
     return config;
   } catch (err) {
-    console.error(`Failed to parse ${configPath}: ${err}`);
+    console.error(`Failed to load config: ${err}`);
     process.exit(1);
   }
 }
@@ -112,12 +94,12 @@ function maybeShowStarNudge(): void {
 
 /**
  * Resolve the effective admin token at startup. If no PI_ROTATOR_ADMIN_TOKEN
- * env var is set and no .admin-token file exists, a new token is generated,
- * persisted to .admin-token, and printed to the operator once. This ensures
+ * env var is set and no persisted token exists, a new token is generated,
+ * saved to the repository, and printed to the operator once. This ensures
  * admin routes are protected by default on first run.
  */
-function bootstrapAdminToken(configDir: string): void {
-  const resolved = ensureAdminToken(configDir);
+function bootstrapAdminToken(): void {
+  const resolved = ensureAdminToken();
   setPersistedAdminToken(resolved.token);
   if (resolved.source === "generated") {
     console.log();
@@ -125,16 +107,13 @@ function bootstrapAdminToken(configDir: string): void {
       "  ╭──────────────────────────────────────────────────────────╮",
     );
     console.log(
-      "  │  Generated admin token (persisted to .admin-token):      │",
+      "  │  Generated admin token (saved to repository):           │",
     );
     const tokenPreview =
       resolved.token.length > 12
         ? `${resolved.token.slice(0, 8)}…${resolved.token.slice(-4)}`
         : resolved.token;
     console.log(`  │  ${tokenPreview}  │`);
-    console.log(
-      "  │  (full token in .admin-token; cat to view)               │",
-    );
     console.log(
       "  │                                                          │",
     );
@@ -199,7 +178,7 @@ export async function main(): Promise<void> {
   console.log();
 
   maybeShowStarNudge();
-  bootstrapAdminToken(getConfigDir());
+  bootstrapAdminToken();
   maybeWarnAboutAdminExposure(config);
   warnIfUsingFallbackOAuthCreds();
   warnIfInsecureTelemetryEndpoint();

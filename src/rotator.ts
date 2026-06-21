@@ -1,6 +1,5 @@
 // Account rotation and token management with per-model routing
 
-import { existsSync } from "node:fs";
 import {
   type AccountConfig,
   type AccountRuntime,
@@ -31,7 +30,6 @@ import {
   FLAG_PATTERNS,
   type FlagEventData,
 } from "./telemetry.js";
-import { getStatePath, getTokenUsagePath } from "./paths.js";
 import {
   applyConfigDefaults,
   saveAccountsConfig,
@@ -42,13 +40,15 @@ import { fetchWithRetry } from "./fetch-with-retry.js";
 import { logger } from "./logger.js";
 import { getUpdateInfo } from "./version-check.js";
 import { getNotifications } from "./notification-poller.js";
-import { backupFile, readJsonFile, writeJsonFileAtomic } from "./storage.js";
 import { getConfiguredAdminToken } from "./admin-auth.js";
+import {
+  getCachedState,
+  setCachedState,
+  getCachedTokenUsage,
+  setCachedTokenUsage,
+} from "./db-store.js";
 
 const rotatorLogger = logger.child("rotator");
-
-const STATE_FILE = getStatePath();
-const TOKENS_FILE = getTokenUsagePath();
 
 function currentUtcDay(now = Date.now()): string {
   return new Date(now).toISOString().slice(0, 10);
@@ -240,11 +240,13 @@ export class AccountRotator {
   }
 
   private loadState(): void {
-    if (!existsSync(STATE_FILE)) return;
-    try {
-      const state = readJsonFile<PersistedState>(STATE_FILE);
-      if (!state) return;
+    const state = getCachedState();
+    if (!state) {
+      this.loadTokenUsage();
+      return;
+    }
 
+    try {
       // Load per-model account assignments
       if (state.modelAccounts) {
         for (const [model, idx] of Object.entries(state.modelAccounts)) {
@@ -305,48 +307,51 @@ export class AccountRotator {
           }
         }
       }
-      this.log("Loaded state from disk");
+      this.log("Loaded persisted state");
     } catch {
       this.log("Could not load state, starting fresh");
     }
-    // Load token usage from separate file
+    this.loadTokenUsage();
+  }
+
+  private loadTokenUsage(): void {
     try {
-      if (existsSync(TOKENS_FILE)) {
-        const parsed = readJsonFile<any>(TOKENS_FILE);
-        if (!parsed) return;
-        const normalize = (arr: any[]): TokenBucket[] =>
-          (arr || [])
-            .map((b: any) => ({
-              period: b.period ?? b.hour ?? "unknown",
-              inputTokens: Number(b.inputTokens || 0),
-              outputTokens: Number(b.outputTokens || 0),
-              requests: Number(b.requests || 0),
-              byModel: b.byModel || {},
-            }))
-            .filter((b: TokenBucket) => b.period && b.period !== "unknown");
-        if (Array.isArray(parsed)) {
-          // Migrate from flat array (old format)
-          this.tokenBuckets = {
-            minutes: normalize(parsed),
-            hours: [],
-            days: [],
-            months: [],
-          };
-        } else {
-          this.tokenBuckets = {
-            minutes: normalize(parsed.minutes || []),
-            hours: normalize(parsed.hours || []),
-            days: normalize(parsed.days || []),
-            months: normalize(parsed.months || []),
-          };
-        }
-        const total =
-          this.tokenBuckets.minutes.length +
-          this.tokenBuckets.hours.length +
-          this.tokenBuckets.days.length +
-          this.tokenBuckets.months.length;
-        this.log(`Loaded ${total} token usage buckets`);
+      const parsed = getCachedTokenUsage() as any;
+
+      if (!parsed) return;
+
+      const normalize = (arr: any[]): TokenBucket[] =>
+        (arr || [])
+          .map((b: any) => ({
+            period: b.period ?? b.hour ?? "unknown",
+            inputTokens: Number(b.inputTokens || 0),
+            outputTokens: Number(b.outputTokens || 0),
+            requests: Number(b.requests || 0),
+            byModel: b.byModel || {},
+          }))
+          .filter((b: TokenBucket) => b.period && b.period !== "unknown");
+      if (Array.isArray(parsed)) {
+        // Migrate from flat array (old format)
+        this.tokenBuckets = {
+          minutes: normalize(parsed),
+          hours: [],
+          days: [],
+          months: [],
+        };
+      } else {
+        this.tokenBuckets = {
+          minutes: normalize(parsed.minutes || []),
+          hours: normalize(parsed.hours || []),
+          days: normalize(parsed.days || []),
+          months: normalize(parsed.months || []),
+        };
       }
+      const total =
+        this.tokenBuckets.minutes.length +
+        this.tokenBuckets.hours.length +
+        this.tokenBuckets.days.length +
+        this.tokenBuckets.months.length;
+      this.log(`Loaded ${total} token usage buckets`);
     } catch {
       this.log("Could not load token usage, starting fresh");
     }
@@ -389,8 +394,7 @@ export class AccountRotator {
       };
     }
     try {
-      backupFile(STATE_FILE, "state");
-      writeJsonFileAtomic(STATE_FILE, state);
+      setCachedState(state);
     } catch (err) {
       this.log(`Failed to save state: ${err}`, "error");
     }
@@ -1867,7 +1871,7 @@ export class AccountRotator {
 
   private saveTokenUsage(): void {
     try {
-      writeJsonFileAtomic(TOKENS_FILE, this.tokenBuckets);
+      setCachedTokenUsage(this.tokenBuckets);
     } catch {
       /* best effort */
     }

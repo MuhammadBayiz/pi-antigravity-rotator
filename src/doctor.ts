@@ -1,11 +1,16 @@
 import { accessSync, constants, existsSync } from "node:fs";
-import { join } from "node:path";
 import { getConfiguredAdminToken } from "./admin-auth.js";
 import { getAccountsPath, getConfigDir, getStatePath } from "./paths.js";
-import { getTokenUsagePath, loadConfigFromDisk } from "./account-store.js";
+import { getTokenUsagePath } from "./account-store.js";
 import { listBackups, readJsonFile } from "./storage.js";
 import type { PersistedState, TokenUsageTiered } from "./types.js";
-import { isDbConfigured } from "./db-store.js";
+import { validateConfig, formatValidationErrors } from "./validators.js";
+import {
+  isDbConfigured,
+  getCachedConfig,
+  getCachedState,
+  getCachedTokenUsage,
+} from "./db-store.js";
 
 function checkWritable(path: string): boolean {
   try {
@@ -34,21 +39,6 @@ export async function runDoctor(
   const tokenUsagePath = getTokenUsagePath();
 
   const dbActive = isDbConfigured();
-  if (dbActive) {
-    try {
-      const { getCachedConfig } = await import("./db-store.js");
-      const cfg = getCachedConfig();
-      if (!cfg) {
-        warnings.push(
-          "Database is configured but config cache is empty/invalid. Setup accounts using 'login' command.",
-        );
-      }
-    } catch (err) {
-      errors.push(
-        `Database connection or query failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-  }
 
   if (!getConfiguredAdminToken(env)) {
     warnings.push(
@@ -63,29 +53,64 @@ export async function runDoctor(
     errors.push(`Config directory is not writable: ${configDir}`);
   }
 
-  try {
-    loadConfigFromDisk();
-  } catch (err) {
-    errors.push(
-      `Config validation failed: ${err instanceof Error ? err.message : String(err)}`,
-    );
+  // Validate config
+  if (dbActive) {
+    const cfg = getCachedConfig();
+    if (!cfg) {
+      warnings.push(
+        "Database is configured but config cache is empty/invalid. Setup accounts using 'login' command.",
+      );
+    }
+  } else {
+    // File-based: validate the disk file directly
+    try {
+      const parsed = readJsonFile<unknown>(accountsPath);
+      if (parsed !== null) {
+        const validation = validateConfig(parsed);
+        if (!validation.ok) {
+          errors.push(
+            `Config validation failed: ${formatValidationErrors(validation.errors)}`,
+          );
+        }
+      }
+    } catch (err) {
+      errors.push(
+        `Config validation failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
-  try {
-    if (existsSync(statePath)) readJsonFile<PersistedState>(statePath);
-  } catch (err) {
-    errors.push(
-      `State file is corrupted: ${err instanceof Error ? err.message : String(err)}`,
-    );
+  // Validate state
+  if (dbActive) {
+    const state = getCachedState();
+    if (state && typeof state !== "object") {
+      warnings.push("State data in database is corrupted.");
+    }
+  } else {
+    try {
+      if (existsSync(statePath)) readJsonFile<PersistedState>(statePath);
+    } catch (err) {
+      errors.push(
+        `State file is corrupted: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
-  try {
-    if (existsSync(tokenUsagePath))
-      readJsonFile<TokenUsageTiered>(tokenUsagePath);
-  } catch (err) {
-    errors.push(
-      `Token usage file is corrupted: ${err instanceof Error ? err.message : String(err)}`,
-    );
+  // Validate token usage
+  if (dbActive) {
+    const usage = getCachedTokenUsage();
+    if (usage && typeof usage !== "object") {
+      warnings.push("Token usage data in database is corrupted.");
+    }
+  } else {
+    try {
+      if (existsSync(tokenUsagePath))
+        readJsonFile<TokenUsageTiered>(tokenUsagePath);
+    } catch (err) {
+      errors.push(
+        `Token usage file is corrupted: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   return {
