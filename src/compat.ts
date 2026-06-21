@@ -3,9 +3,7 @@ import { Readable } from "node:stream";
 import { PayloadTooLargeError, readLimitedBody } from "./body-limit.js";
 import { logger, redactSensitive } from "./logger.js";
 import type { AccountRotator } from "./rotator.js";
-import { applyModelAlias, resolveQuotaModelKey } from "./types.js";
 import { withRotation, flattenHeaders, type RequestBody } from "./proxy.js";
-import { ResponsesStore, type StoredResponseEntry } from "./responses-store.js";
 import {
   isRecord,
   sanitizeGeminiSchema,
@@ -21,7 +19,6 @@ import {
 } from "./compat/model-specs.js";
 import type { ModelSpec } from "./compat/model-specs.js";
 import {
-  thoughtSignatureCache,
   responsesStore,
   makeCompatId,
   getStoredResponse,
@@ -33,16 +30,12 @@ import {
   cacheThoughtSignature,
 } from "./compat/cache.js";
 import {
-  isNonEmptyString,
-  extractText,
-  extractParts,
   normalizeOpenAIChatCompletionRequest,
   normalizeOpenAIResponsesRequest,
   normalizeAnthropicMessagesRequest,
   convertResponsesToChatRequest,
   openAIToAntigravityBody,
   anthropicToAntigravityBody,
-  mapReasoningEffortToThinkingLevel,
   validateOpenAIChatCompletionRequest,
   validateOpenAIResponsesRequest,
   validateAnthropicMessagesRequest,
@@ -58,8 +51,6 @@ import type {
   OpenAIResponsesRequest,
   AnthropicMessagesRequest,
   CompatCompletion,
-  AntigravityPart,
-  GeminiContent,
   ResponsesConversionResult,
 } from "./compat/translators.js";
 
@@ -114,32 +105,6 @@ export function logValidationFailure(scope: string, payload: unknown): void {
 // Interfaces and types have been moved to src/compat/translators.ts
 
 // Response Output types
-interface ResponseOutputText {
-  type: "output_text";
-  text: string;
-  annotations: unknown[];
-}
-
-interface ResponseMessageOutputItem {
-  id: string;
-  type: "message";
-  status: "completed";
-  role: "assistant";
-  content: ResponseOutputText[];
-}
-
-interface ResponseFunctionCallOutputItem {
-  id: string;
-  type: "function_call";
-  call_id: string;
-  name: string;
-  arguments: string;
-  status: "completed";
-}
-
-type ResponseOutputItem =
-  | ResponseMessageOutputItem
-  | ResponseFunctionCallOutputItem;
 
 // Cache and stores have been moved to src/compat/cache.ts
 
@@ -293,131 +258,7 @@ function summarizeCompatRequest(body: RequestBody): string {
   return `model=${body.model} userAgent=${body.userAgent || "none"} turns=${contents.length} tools=${tools} systemInstruction=${systemInstruction}`;
 }
 
-function writeOpenAIStream(
-  res: ServerResponse,
-  model: string,
-  completion: CompatCompletion,
-): void {
-  const created = Math.floor(Date.now() / 1000);
-  const id = `chatcmpl-${Date.now().toString(36)}`;
-  res.writeHead(200, {
-    "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache",
-    Connection: "keep-alive",
-  });
-  res.write(
-    `data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }] })}\n\n`,
-  );
-  // Emit reasoning/thinking content first if present
-  if (completion.thinkingText) {
-    res.write(
-      `data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { reasoning_content: completion.thinkingText }, finish_reason: null }] })}\n\n`,
-    );
-  }
-  if (completion.toolCalls && completion.toolCalls.length > 0) {
-    // Emit tool_call deltas
-    for (let i = 0; i < completion.toolCalls.length; i++) {
-      const tc = completion.toolCalls[i];
-      res.write(
-        `data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { tool_calls: [{ index: i, id: tc.id, type: "function", function: { name: tc.function.name, arguments: tc.function.arguments } }] }, finish_reason: null }] })}\n\n`,
-      );
-    }
-    res.write(
-      `data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] })}\n\n`,
-    );
-  } else {
-    if (completion.text) {
-      res.write(
-        `data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: { content: completion.text }, finish_reason: null }] })}\n\n`,
-      );
-    }
-    res.write(
-      `data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\n`,
-    );
-  }
-  // Emit usage chunk so agents (hermes, openwebui) can display token statistics
-  if (completion.inputTokens > 0 || completion.outputTokens > 0) {
-    res.write(
-      `data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [], usage: { prompt_tokens: completion.inputTokens, completion_tokens: completion.outputTokens, total_tokens: completion.inputTokens + completion.outputTokens } })}\n\n`,
-    );
-  }
-  res.write("data: [DONE]\n\n");
-  res.end();
-}
 
-function writeAnthropicStream(
-  res: ServerResponse,
-  model: string,
-  completion: CompatCompletion,
-): void {
-  const id = `msg_${Date.now().toString(36)}`;
-  res.writeHead(200, {
-    "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache",
-    Connection: "keep-alive",
-  });
-  res.write(
-    `event: message_start\ndata: ${JSON.stringify({ type: "message_start", message: { id, type: "message", role: "assistant", model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: completion.inputTokens, output_tokens: 0 } } })}\n\n`,
-  );
-  let contentIndex = 0;
-  // Emit thinking block first if present (Anthropic format)
-  if (completion.thinkingText) {
-    res.write(
-      `event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index: contentIndex, content_block: { type: "thinking", thinking: "" } })}\n\n`,
-    );
-    res.write(
-      `event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", index: contentIndex, delta: { type: "thinking_delta", thinking: completion.thinkingText } })}\n\n`,
-    );
-    res.write(
-      `event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: contentIndex })}\n\n`,
-    );
-    contentIndex++;
-  }
-  if (completion.text) {
-    res.write(
-      `event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index: contentIndex, content_block: { type: "text", text: "" } })}\n\n`,
-    );
-    res.write(
-      `event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", index: contentIndex, delta: { type: "text_delta", text: completion.text } })}\n\n`,
-    );
-    res.write(
-      `event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: contentIndex })}\n\n`,
-    );
-    contentIndex++;
-  }
-  // Emit tool_use content blocks if present
-  let hasToolUse = false;
-  if (completion.toolCalls && completion.toolCalls.length > 0) {
-    hasToolUse = true;
-    for (const tc of completion.toolCalls) {
-      let parsedInput: unknown;
-      try {
-        parsedInput = JSON.parse(tc.function.arguments || "{}");
-      } catch {
-        parsedInput = {};
-      }
-      res.write(
-        `event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index: contentIndex, content_block: { type: "tool_use", id: tc.id, name: tc.function.name, input: {} } })}\n\n`,
-      );
-      res.write(
-        `event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", index: contentIndex, delta: { type: "input_json_delta", partial_json: JSON.stringify(parsedInput) } })}\n\n`,
-      );
-      res.write(
-        `event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: contentIndex })}\n\n`,
-      );
-      contentIndex++;
-    }
-  }
-  const stopReason = hasToolUse ? "tool_use" : "end_turn";
-  // message_delta: include both input_tokens and output_tokens so hermes shows full context count
-  res.write(
-    `event: message_delta\ndata: ${JSON.stringify({ type: "message_delta", delta: { stop_reason: stopReason, stop_sequence: null }, usage: { input_tokens: completion.inputTokens, output_tokens: completion.outputTokens } })}\n\n`,
-  );
-  res.write(
-    `event: message_stop\ndata: ${JSON.stringify({ type: "message_stop" })}\n\n`,
-  );
-  res.end();
-}
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   try {

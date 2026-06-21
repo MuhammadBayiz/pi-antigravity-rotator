@@ -5,7 +5,6 @@ import {
 	anthropicToAntigravityBody,
 	normalizeOpenAIChatCompletionRequest,
 	normalizeOpenAIResponsesRequest,
-	normalizeAnthropicMessagesRequest,
 } from "../src/compat/translators.js";
 
 describe("translators component", () => {
