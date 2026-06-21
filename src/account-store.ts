@@ -4,14 +4,20 @@ import { join } from "node:path";
 import { getAccountsPath } from "./paths.js";
 import type { AccountConfig, Config } from "./types.js";
 import { writeJsonFileAtomic } from "./storage.js";
+import {
+  loadConfigFromDisk,
+  loadOrCreateAccountsConfig,
+  saveAccountsConfig,
+} from "./config-storage.js";
+import { applyConfigDefaults, getDefaultConfig } from "./config-defaults.js";
 
 export {
   loadConfigFromDisk,
   loadOrCreateAccountsConfig,
   saveAccountsConfig,
-} from "./config-storage.js";
-
-export { applyConfigDefaults, getDefaultConfig } from "./config-defaults.js";
+  applyConfigDefaults,
+  getDefaultConfig,
+};
 
 const ACCOUNTS_FILE = getAccountsPath();
 const PI_DIR = join(homedir(), ".pi", "agent");

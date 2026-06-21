@@ -22,7 +22,7 @@ import {
 } from "./compat.js";
 import { setModelAliasesOverride } from "./types.js";
 import { writeTextFileAtomic } from "./storage.js";
-import { initDb } from "./db-store.js";
+import { initDb, isDbConfigured } from "./db-store.js";
 
 function loadConfig(): Config {
   if (isDbConfigured()) {
