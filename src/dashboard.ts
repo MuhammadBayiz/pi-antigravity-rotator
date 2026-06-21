@@ -9,64 +9,112 @@ export function serveDashboard(res: ServerResponse): void {
   res.end(DASHBOARD_HTML);
 }
 
-export function serveStatusApi(res: ServerResponse, rotator: AccountRotator): void {
-	res.writeHead(200, {
-		"Content-Type": "application/json",
-		"Cache-Control": "no-store",
-	});
-	res.end(JSON.stringify(rotator.getStatus()));
-}
-
-export function serveConfigApi(res: ServerResponse, rotator: AccountRotator): void {
-	res.writeHead(200, {
-		"Content-Type": "application/json",
-		"Cache-Control": "no-store",
-	});
-	res.end(JSON.stringify(rotator.getConfig()));
-}
-
-export function serveConfigExportApi(res: ServerResponse, rotator: AccountRotator): void {
+export function serveStatusApi(
+  res: ServerResponse,
+  rotator: AccountRotator,
+): void {
   res.writeHead(200, {
     "Content-Type": "application/json",
-    "Content-Disposition": 'attachment; filename="pi-antigravity-rotator-config.json"',
+    "Cache-Control": "no-store",
+  });
+  res.end(JSON.stringify(rotator.getStatus()));
+}
+
+export function serveConfigApi(
+  res: ServerResponse,
+  rotator: AccountRotator,
+): void {
+  res.writeHead(200, {
+    "Content-Type": "application/json",
+    "Cache-Control": "no-store",
+  });
+  res.end(JSON.stringify(rotator.getConfig()));
+}
+
+export function serveConfigExportApi(
+  res: ServerResponse,
+  rotator: AccountRotator,
+): void {
+  res.writeHead(200, {
+    "Content-Type": "application/json",
+    "Content-Disposition":
+      'attachment; filename="pi-antigravity-rotator-config.json"',
   });
   res.end(JSON.stringify(rotator.getConfig(), null, 2));
 }
 
-export function serveConfigImportApi(res: ServerResponse, rotator: AccountRotator, config: Config): void {
+export function serveConfigImportApi(
+  res: ServerResponse,
+  rotator: AccountRotator,
+  config: Config,
+): void {
   rotator.replaceConfig(config);
   res.writeHead(200, { "Content-Type": "application/json" });
-  res.end(JSON.stringify({ ok: true, importedAccounts: config.accounts.length }));
+  res.end(
+    JSON.stringify({ ok: true, importedAccounts: config.accounts.length }),
+  );
 }
 
-export function serveEnableApi(res: ServerResponse, rotator: AccountRotator, email: string): void {
+export function serveEnableApi(
+  res: ServerResponse,
+  rotator: AccountRotator,
+  email: string,
+): void {
   const ok = rotator.enableAccount(email);
   res.writeHead(ok ? 200 : 409, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ ok, email }));
 }
 
-export function serveDisableApi(res: ServerResponse, rotator: AccountRotator, email: string): void {
+export function serveDisableApi(
+  res: ServerResponse,
+  rotator: AccountRotator,
+  email: string,
+): void {
   const ok = rotator.disableAccount(email);
   res.writeHead(ok ? 200 : 404, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ ok, email }));
 }
 
-export function serveQuarantineApi(res: ServerResponse, rotator: AccountRotator, email: string): void {
+export function serveQuarantineApi(
+  res: ServerResponse,
+  rotator: AccountRotator,
+  email: string,
+): void {
   const ok = rotator.quarantineAccount(email);
   res.writeHead(ok ? 200 : 404, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ ok, email }));
 }
 
-export function serveRestoreApi(res: ServerResponse, rotator: AccountRotator, email: string): void {
+export function serveRestoreApi(
+  res: ServerResponse,
+  rotator: AccountRotator,
+  email: string,
+): void {
   const ok = rotator.restoreAccount(email);
   res.writeHead(ok ? 200 : 404, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ ok, email }));
 }
 
-export function serveFreshWindowStartsApi(res: ServerResponse, rotator: AccountRotator, enabled: boolean): void {
+export function serveRemoveAccountApi(
+  res: ServerResponse,
+  rotator: AccountRotator,
+  email: string,
+): void {
+  const ok = rotator.removeAccount(email);
+  res.writeHead(ok ? 200 : 400, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ ok, email }));
+}
+
+export function serveFreshWindowStartsApi(
+  res: ServerResponse,
+  rotator: AccountRotator,
+  enabled: boolean,
+): void {
   const changed = rotator.setAllowFreshWindowStarts(enabled);
   res.writeHead(200, { "Content-Type": "application/json" });
-  res.end(JSON.stringify({ ok: true, changed, allowFreshWindowStarts: enabled }));
+  res.end(
+    JSON.stringify({ ok: true, changed, allowFreshWindowStarts: enabled }),
+  );
 }
 
 export function serveAccountFreshWindowStartsApi(
@@ -77,16 +125,27 @@ export function serveAccountFreshWindowStartsApi(
 ): void {
   const ok = rotator.setAccountAllowFreshWindowStartsOverride(email, enabled);
   res.writeHead(ok ? 200 : 404, { "Content-Type": "application/json" });
-  res.end(JSON.stringify({ ok, email, allowFreshWindowStartsOverride: enabled }));
+  res.end(
+    JSON.stringify({ ok, email, allowFreshWindowStartsOverride: enabled }),
+  );
 }
 
-export function serveClearInFlightApi(res: ServerResponse, rotator: AccountRotator, email: string, modelKey?: string): void {
+export function serveClearInFlightApi(
+  res: ServerResponse,
+  rotator: AccountRotator,
+  email: string,
+  modelKey?: string,
+): void {
   const ok = rotator.clearInFlightRequests(email, modelKey);
   res.writeHead(ok ? 200 : 404, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ ok, email, modelKey }));
 }
 
-export function serveClearBreakerApi(res: ServerResponse, rotator: AccountRotator, modelKey?: string): void {
+export function serveClearBreakerApi(
+  res: ServerResponse,
+  rotator: AccountRotator,
+  modelKey?: string,
+): void {
   if (modelKey) {
     rotator.clearModelBreaker(modelKey);
   } else {
@@ -1486,9 +1545,9 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
           <span style="font-weight:bold;font-size:1.1rem;">☕ Buy me a coffee on Ko-fi</span>
           <span style="font-size:0.9rem;margin-top:4px;opacity:0.9;">ko-fi.com/tuxevil</span>
         </a>
-        
+
         <div style="font-size:0.8rem;color:var(--text-dim);font-weight:bold;text-transform:uppercase;letter-spacing:0.5px;margin:4px 0;">— OR —</div>
-        
+
         <div style="width:100%; padding:14px; border: 1px solid var(--border); border-radius: 8px; background: rgba(255,255,255,0.02); box-sizing: border-box; text-align: left;">
           <p style="margin-bottom:10px;font-weight:bold;color:var(--accent);display:flex;align-items:center;gap:6px;font-size:0.95rem;">
             🔑 How to Donate Account Quota:
@@ -1562,7 +1621,7 @@ function renderQuotaBars(account) {
         // If quota is 100% and remaining time is very close to exactly 5 hours or 7 days, it's a rolling idle timer
         var isRolling5h = q.percentRemaining === 100 && Math.abs(remaining - (5 * 3600000)) < 600000; // Within 10 min of 5h
         var isRolling7d = q.percentRemaining === 100 && Math.abs(remaining - (7 * 86400000)) < 600000; // Within 10 min of 7d
-        
+
         if (isRolling5h || isRolling7d) {
           resetLabel = '<span style="color:var(--text-dim)">idle</span>';
         } else {
@@ -1638,6 +1697,7 @@ function renderAccounts(data) {
     healthGrid +
     '<div class="ops-buttons">' +
       '<button class="btn-secondary" onclick="refresh()">Refresh</button>' +
+      '<button class="btn-secondary" onclick="window.location.href=\'/login-cli\' + (ADMIN_TOKEN ? (\'?token=\' + encodeURIComponent(ADMIN_TOKEN)) : \'\')">Add Account</button>' +
       '<button class="btn-secondary" onclick="openRoutingInspectorModal()">Routing Inspector</button>' +
       '<button class="btn-secondary" onclick="openConfigEditorModal()">Config Editor</button>' +
       '<button class="btn-secondary" onclick="toggleFlagged()">' +
@@ -1646,7 +1706,7 @@ function renderAccounts(data) {
       '<button class="btn-secondary" onclick="setFreshWindowStarts(' + (!controls.allowFreshWindowStarts) + ')">' +
         (controls.allowFreshWindowStarts ? 'Block Fresh Windows' : 'Allow Fresh Windows') +
       '</button>' +
-      (Object.keys(data.circuitBreakers.model || {}).length > 0 || Object.keys(data.circuitBreakers.project || {}).length > 0 ? 
+      (Object.keys(data.circuitBreakers.model || {}).length > 0 || Object.keys(data.circuitBreakers.project || {}).length > 0 ?
         '<button class="btn-secondary" style="border-color:var(--red);color:var(--red)" onclick="clearCircuitBreaker()">Reset All Circuit Breakers</button>' : '') +
     '</div>' +
     '<div class="ops-warning">' + freshPolicyHint + '</div>';
@@ -1765,6 +1825,7 @@ function renderAccounts(data) {
         '<button class="btn-enable" onclick="setAccountFreshWindowOverride(\\'' + jsString(a.email) + '\\', ' + (!a.allowFreshWindowStartsOverride) + ')">' +
           (a.allowFreshWindowStartsOverride ? 'Use Global Fresh Policy' : 'Allow Fresh On This Account') +
         '</button>' +
+        '<button class="btn-enable" style="border-color:var(--red);color:var(--red)" onclick="if(confirm(\'Remove account \' + ' + JSON.stringify(a.email) + ' + \'? This cannot be undone.\')) removeAccount(\'' + jsString(a.email) + '\')">Remove</button>' +
       '</div>' +
       (isCooldown && cooldownPercent > 0 ? '<div class="cooldown-bar" style="width:' + cooldownPercent + '%"></div>' : '') +
     '</div>';
@@ -2060,7 +2121,7 @@ function renderAttentionPanel(data) {
 function renderAttentionItem(title, description, tags, type) {
   var icon = '';
   var colorClass = '';
-  
+
   if (type === 'flagged') {
     icon = '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>';
     colorClass = 'operator-red';
@@ -2153,7 +2214,7 @@ window.__tokenView = '1h';
 function exportData(format) {
   if (!window.__lastData || !window.__lastData.tokenUsage) return;
   var usage = window.__lastData.tokenUsage;
-  
+
   if (format === 'json') {
     var dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(usage, null, 2));
     var a = document.createElement('a');
@@ -2247,13 +2308,13 @@ function renderTokenChart(tokenUsage) {
       else if (periodStr.length === 16) d = new Date(periodStr + ':00Z');
       else d = new Date(periodStr);
       if (isNaN(d.getTime())) return periodStr;
-      
+
       var y = d.getFullYear();
       var mo = String(d.getMonth() + 1).padStart(2, '0');
       var da = String(d.getDate()).padStart(2, '0');
       var h = String(d.getHours()).padStart(2, '0');
       var mi = d.getMinutes();
-      
+
       if (type === 'day') return y + '-' + mo + '-' + da;
       if (type === 'hour') return y + '-' + mo + '-' + da + 'T' + h;
       if (type === '5min') return y + '-' + mo + '-' + da + 'T' + h + ':' + String(Math.floor(mi/5)*5).padStart(2, '0');
@@ -2273,7 +2334,7 @@ function renderTokenChart(tokenUsage) {
     var stepMs = 60000;
     var count = 60;
     var type = 'raw';
-    
+
     if (view === '1h') { stepMs = 60000; count = 60; }
     else if (view === '2h') { stepMs = 60000; count = 120; }
     else if (view === '4h') { stepMs = 120000; count = 120; type = '2min'; }
@@ -2356,7 +2417,7 @@ function renderTokenChart(tokenUsage) {
   if (maxTokens === 0) maxTokens = 1;
 
   var chartWidth = chart.clientWidth || 800;
-  var minSvgWidth = buckets.length * 16 + 40; 
+  var minSvgWidth = buckets.length * 16 + 40;
   var svgWidth = Math.max(chartWidth, minSvgWidth);
   var availableWidth = svgWidth - 50;
   var step = availableWidth / Math.max(1, buckets.length);
@@ -2459,7 +2520,7 @@ function renderHeatmap(tokenUsage) {
     else if (periodStr.length === 13) d = new Date(periodStr + ':00:00Z');
     else if (periodStr.length === 16) d = new Date(periodStr + ':00Z');
     else d = new Date(periodStr);
-    
+
     if (isNaN(d.getTime())) return null;
     return {
       dayKey: d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'),
@@ -3026,6 +3087,14 @@ async function quarantineAccount(email) {
 async function restoreAccount(email) {
   await authFetch('/api/restore/' + encodeURIComponent(email), { method: 'POST' });
   refresh();
+}
+
+async function removeAccount(email) {
+  try {
+    var r = await authFetch('/api/remove-account/' + encodeURIComponent(email), { method: 'POST' });
+    var d = await r.json();
+    if (d.ok) refresh(); else alert('Failed to remove: ' + JSON.stringify(d));
+  } catch(e) { alert('Failed to remove: ' + e); }
 }
 
 async function setFreshWindowStarts(enabled) {

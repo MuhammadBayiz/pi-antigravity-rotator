@@ -74,6 +74,15 @@ export function addAccountToConfig(entry: AccountConfig): { isNew: boolean } {
   return { isNew: true };
 }
 
+export function removeAccountFromConfig(email: string): boolean {
+  const config = loadOrCreateAccountsConfig();
+  const idx = config.accounts.findIndex((a) => a.email === email);
+  if (idx < 0) return false;
+  config.accounts.splice(idx, 1);
+  saveAccountsConfig(config);
+  return true;
+}
+
 export function ensurePiModelsConfig(): void {
   mkdirSync(PI_DIR, { recursive: true });
 

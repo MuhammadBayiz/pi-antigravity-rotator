@@ -27,6 +27,7 @@ import {
   serveDisableApi,
   serveQuarantineApi,
   serveRestoreApi,
+  serveRemoveAccountApi,
   serveFreshWindowStartsApi,
   serveAccountFreshWindowStartsApi,
   serveClearInFlightApi,
@@ -1633,6 +1634,15 @@ export function startProxy(
       if (!requireAdmin(req, res)) return;
       const email = decodeURIComponent(url.slice("/api/restore/".length));
       serveRestoreApi(res, rotator, email);
+      return;
+    }
+
+    if (method === "POST" && url.startsWith("/api/remove-account/")) {
+      if (!requireAdmin(req, res)) return;
+      const email = decodeURIComponent(
+        url.slice("/api/remove-account/".length),
+      );
+      serveRemoveAccountApi(res, rotator, email);
       return;
     }
 
