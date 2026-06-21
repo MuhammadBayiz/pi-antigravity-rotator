@@ -36,6 +36,8 @@ import {
   handleHostedCallback,
   serveLoginLanding,
   startHostedLogin,
+  serveCliLogin,
+  handleCliLoginApi,
 } from "./onboarding.js";
 import { requireAdmin } from "./admin-auth.js";
 import { PayloadTooLargeError, readLimitedBody } from "./body-limit.js";
@@ -1493,7 +1495,26 @@ export function startProxy(
     if (method === "GET" && pathname === "/login") {
       if (!requireAdmin(req, res)) return;
       trackFeature("hostedLogin");
-      serveLoginLanding(req, res);
+      serveLoginLanding(res);
+      return;
+    }
+
+    if (method === "GET" && pathname === "/login-cli") {
+      if (!requireAdmin(req, res)) return;
+      trackFeature("cliLogin");
+      serveCliLogin(res);
+      return;
+    }
+
+    if (method === "POST" && pathname === "/api/cli-login") {
+      if (!requireAdmin(req, res)) return;
+      handleCliLoginApi(req, res, rotator).catch((err) => {
+        log(`CLI login error: ${err}`, rotator, "error");
+        if (!res.headersSent) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+        }
+        res.end(JSON.stringify({ ok: false, error: "Internal login error" }));
+      });
       return;
     }
 

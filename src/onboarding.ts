@@ -153,29 +153,17 @@ function renderPage(title: string, body: string): string {
 </html>`;
 }
 
-export function serveLoginLanding(
-  req: IncomingMessage,
-  res: ServerResponse,
-): void {
+export function serveLoginLanding(res: ServerResponse): void {
   const oauth = getOAuthClientConfig();
   const hostedReady = isHostedOAuthConfigured();
-
-  // Preserve the admin token for sub-navigation links
-  const requestUrl = new URL(req.url || "/", "http://localhost");
-  const adminToken = requestUrl.searchParams.get("token");
-  const tokenQs = adminToken ? `?token=${encodeURIComponent(adminToken)}` : "";
-
-  let message: string;
-  if (hostedReady) {
-    message = `<p>This page starts the Antigravity sign-in flow and returns here automatically so the account can be added to this rotator.</p>
+  const message = hostedReady
+    ? `<p>This page starts the Antigravity sign-in flow and returns here automatically so the account can be added to this rotator.</p>
 <p class="mono">Configured callback: ${oauth.redirectUri}</p>
 <div class="note">Signing in here grants this server a refresh token for the selected Google account. That allows the rotator to keep using that account until access is revoked.</div>
-<a class="cta" href="/auth/antigravity/start${tokenQs}">Continue With Google</a>`;
-  } else {
-    message = `<p>This page starts the Antigravity sign-in flow. Because the redirect goes to <code>localhost</code>, you will need to paste the redirect URL back here after completing the Google sign-in.</p>
-<div class="note">Signing in here grants this server a refresh token for the selected Google account. That allows the rotator to keep using that account until access is revoked.</div>
-<a class="cta" href="/auth/antigravity/start${tokenQs}">Continue With Google</a>`;
-  }
+<a class="cta" href="/auth/antigravity/start">Continue With Google</a>`
+    : `<p>This server is not yet configured for hosted OAuth.</p>
+<p class="mono">Set ANTIGRAVITY_REDIRECT_URI, and usually ANTIGRAVITY_CLIENT_ID plus ANTIGRAVITY_CLIENT_SECRET, to a public callback URL registered with the OAuth client.</p>
+<div class="note error">The current redirect is still loopback-only, so the transparent public callback cannot complete yet.</div>`;
 
   res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
   res.end(
@@ -187,6 +175,17 @@ export function startHostedLogin(
   req: IncomingMessage,
   res: ServerResponse,
 ): void {
+  if (!isHostedOAuthConfigured()) {
+    res.writeHead(409, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(
+      renderPage(
+        "Hosted OAuth Not Configured",
+        "<h1>Hosted Login Isn’t Ready</h1><p>This server still uses a loopback redirect URI. Configure a public redirect before sharing this page.</p>",
+      ),
+    );
+    return;
+  }
+
   prunePendingSessions();
   const { verifier, challenge } = generatePkce();
   const state = generateState();
@@ -195,6 +194,215 @@ export function startHostedLogin(
   const authUrl = buildAuthUrl(state, challenge);
   res.writeHead(302, { Location: authUrl });
   res.end();
+}
+
+// ── Web-based CLI login (/login-cli) ──────────────────────────────────────────
+// Replicates the CLI login flow in the browser: shows the Google OAuth URL,
+// user signs in and pastes the redirect URL back, server exchanges the code.
+
+interface CliLoginSession {
+  verifier: string;
+  challenge: string;
+  authUrl: string;
+  createdAt: number;
+}
+
+const cliLoginSessions = new Map<string, CliLoginSession>();
+
+function pruneCliSessions(): void {
+  const cutoff = Date.now() - SESSION_TTL_MS;
+  for (const [id, session] of cliLoginSessions.entries()) {
+    if (session.createdAt < cutoff) {
+      cliLoginSessions.delete(id);
+    }
+  }
+}
+
+export function serveCliLogin(res: ServerResponse): void {
+  pruneCliSessions();
+  const { verifier, challenge } = generatePkce();
+  const authUrl = buildAuthUrl(verifier, challenge);
+  const sessionId = generateState();
+  cliLoginSessions.set(sessionId, {
+    verifier,
+    challenge,
+    authUrl,
+    createdAt: Date.now(),
+  });
+
+  res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+  res.end(
+    renderPage(
+      "Add Account",
+      `<h1>Add Account</h1>
+<p>This page works like the CLI login. Follow the steps below to add a Google account to the rotator.</p>
+
+<h3 style="margin:24px 0 8px;font-size:18px;">Step 1 — Sign in with Google</h3>
+<p>Open this URL in a new tab and complete the Google sign-in:</p>
+<div class="mono" id="authUrl">${authUrl}</div>
+<button class="cta" style="margin-top:10px;cursor:pointer;border:none;font-family:inherit;font-size:14px;" onclick="navigator.clipboard.writeText(document.getElementById('authUrl').textContent).then(()=>{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy URL',1500)})">
+  Copy URL
+</button>
+
+<h3 style="margin:24px 0 8px;font-size:18px;">Step 2 — Paste the redirect URL</h3>
+<p>After signing in, Google will redirect to <code>localhost</code> (which will fail — that's expected). Copy the <strong>full URL</strong> from your browser's address bar and paste it here:</p>
+<form id="pasteForm" style="margin-top:12px;">
+  <input type="hidden" name="session" value="${sessionId}" />
+  <textarea name="redirectUrl" rows="4" placeholder="Paste the redirect URL here (starts with http://localhost:51121/oauth-callback?...)" style="
+    width:100%;font-family:'IBM Plex Mono',monospace;font-size:13px;
+    padding:12px 14px;border-radius:12px;border:1px solid rgba(31,42,31,0.15);
+    background:rgba(31,42,31,0.03);resize:vertical;
+  "></textarea>
+  <button type="submit" class="cta" style="cursor:pointer;border:none;font-family:inherit;font-size:16px;margin-top:12px;">
+    Connect Account
+  </button>
+</form>
+<div id="result" style="margin-top:18px;"></div>
+
+<script>
+document.getElementById('pasteForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const btn = form.querySelector('button[type=submit]');
+  const resultDiv = document.getElementById('result');
+  const redirectUrl = form.redirectUrl.value.trim();
+  const session = form.session.value;
+  if (!redirectUrl) { resultDiv.innerHTML = '<div class="note error">Please paste the redirect URL.</div>'; return; }
+  btn.disabled = true;
+  btn.textContent = 'Connecting...';
+  resultDiv.innerHTML = '<div class="note">Exchanging code for tokens...</div>';
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('token') || '';
+    const res = await fetch('/api/cli-login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token ? { 'X-Rotator-Admin-Token': token } : {}) },
+      body: JSON.stringify({ session, redirectUrl }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      resultDiv.innerHTML = '<div class="note" style="border-left-color:var(--accent);background:rgba(30,107,82,0.12);">' +
+        '<strong>' + data.email + '</strong> ' + (data.isNew ? 'added' : 'updated') + ' successfully.<br>' +
+        'Project: <span class="mono" style="padding:2px 6px;">' + data.projectId + '</span>' +
+        '</div>';
+    } else {
+      resultDiv.innerHTML = '<div class="note error">' + (data.error || 'Unknown error') + '</div>';
+    }
+  } catch (err) {
+    resultDiv.innerHTML = '<div class="note error">Request failed: ' + err.message + '</div>';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Connect Account';
+  }
+});
+</script>
+`,
+    ),
+  );
+}
+
+export async function handleCliLoginApi(
+  req: IncomingMessage,
+  res: ServerResponse,
+  rotator: AccountRotator,
+): Promise<void> {
+  let body: { session?: string; redirectUrl?: string };
+  try {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk as Buffer);
+    body = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
+  } catch {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: false, error: "Invalid JSON body" }));
+    return;
+  }
+
+  const { session: sessionId, redirectUrl } = body;
+  if (!sessionId || !redirectUrl) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({ ok: false, error: "Missing session or redirectUrl" }),
+    );
+    return;
+  }
+
+  pruneCliSessions();
+  const session = cliLoginSessions.get(sessionId);
+  if (!session) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        ok: false,
+        error: "Session expired or invalid. Reload the page and try again.",
+      }),
+    );
+    return;
+  }
+
+  // Parse the redirect URL to extract code
+  let code: string | undefined;
+  try {
+    const url = new URL(redirectUrl.trim());
+    code = url.searchParams.get("code") ?? undefined;
+  } catch {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        ok: false,
+        error:
+          "Could not parse the URL. Make sure you pasted the full redirect URL.",
+      }),
+    );
+    return;
+  }
+
+  if (!code) {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        ok: false,
+        error: "No authorization code found in the URL.",
+      }),
+    );
+    return;
+  }
+
+  cliLoginSessions.delete(sessionId);
+
+  try {
+    const tokenData = await exchangeAuthorizationCode(code, session.verifier);
+    const email = await getUserEmail(tokenData.accessToken);
+    const project = await discoverProject(tokenData.accessToken);
+    const label = email ? email.split("@")[0] : "Account";
+    const entry = {
+      email: email || "unknown@gmail.com",
+      refreshToken: tokenData.refreshToken,
+      projectId: project.projectId,
+      projectSource: project.source,
+      label,
+    };
+
+    const { isNew } = addAccountToConfig(entry);
+    rotator.addOrUpdateAccount(entry);
+
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        ok: true,
+        email: entry.email,
+        isNew,
+        projectId: project.projectId,
+      }),
+    );
+  } catch (err) {
+    res.writeHead(500, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    );
+  }
 }
 
 export async function handleHostedCallback(
