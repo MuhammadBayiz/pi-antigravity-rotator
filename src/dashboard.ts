@@ -1825,7 +1825,7 @@ function renderAccounts(data) {
         '<button class="btn-enable" onclick="setAccountFreshWindowOverride(\\'' + jsString(a.email) + '\\', ' + (!a.allowFreshWindowStartsOverride) + ')">' +
           (a.allowFreshWindowStartsOverride ? 'Use Global Fresh Policy' : 'Allow Fresh On This Account') +
         '</button>' +
-        '<button class="btn-enable" style="border-color:var(--red);color:var(--red)" onclick="if(confirm(\'Remove account \' + ' + JSON.stringify(a.email) + ' + \'? This cannot be undone.\')) removeAccount(\'' + jsString(a.email) + '\')">Remove</button>' +
+        '<button class="btn-enable" style="border-color:var(--red);color:var(--red)" onclick="confirmRemoveAccount(\\'' + jsString(a.email) + '\\')">Remove</button>' +
       '</div>' +
       (isCooldown && cooldownPercent > 0 ? '<div class="cooldown-bar" style="width:' + cooldownPercent + '%"></div>' : '') +
     '</div>';
@@ -3095,6 +3095,12 @@ async function removeAccount(email) {
     var d = await r.json();
     if (d.ok) refresh(); else alert('Failed to remove: ' + JSON.stringify(d));
   } catch(e) { alert('Failed to remove: ' + e); }
+}
+
+function confirmRemoveAccount(email) {
+  if (confirm('Remove account ' + email + '? This cannot be undone.')) {
+    removeAccount(email);
+  }
 }
 
 async function setFreshWindowStarts(enabled) {
