@@ -1,10 +1,7 @@
 import { accessSync, constants, existsSync } from "node:fs";
 import { getConfiguredAdminToken } from "./admin-auth.js";
-import { getAccountsPath, getConfigDir, getStatePath } from "./paths.js";
-import { getTokenUsagePath } from "./account-store.js";
-import { listBackups, readJsonFile } from "./storage.js";
-import type { PersistedState, TokenUsageTiered } from "./types.js";
-import { validateConfig, formatValidationErrors } from "./validators.js";
+import { getConfigDir } from "./paths.js";
+import { listBackups } from "./storage.js";
 import {
   isDbConfigured,
   getCachedConfig,
@@ -34,11 +31,6 @@ export async function runDoctor(
   const warnings: string[] = [];
   const errors: string[] = [];
   const configDir = getConfigDir();
-  const accountsPath = getAccountsPath();
-  const statePath = getStatePath();
-  const tokenUsagePath = getTokenUsagePath();
-
-  const dbActive = isDbConfigured();
 
   if (!getConfiguredAdminToken(env)) {
     warnings.push(
@@ -53,64 +45,24 @@ export async function runDoctor(
     errors.push(`Config directory is not writable: ${configDir}`);
   }
 
-  // Validate config
-  if (dbActive) {
-    const cfg = getCachedConfig();
-    if (!cfg) {
-      warnings.push(
-        "Database is configured but config cache is empty/invalid. Setup accounts using 'login' command.",
-      );
-    }
-  } else {
-    // File-based: validate the disk file directly
-    try {
-      const parsed = readJsonFile<unknown>(accountsPath);
-      if (parsed !== null) {
-        const validation = validateConfig(parsed);
-        if (!validation.ok) {
-          errors.push(
-            `Config validation failed: ${formatValidationErrors(validation.errors)}`,
-          );
-        }
-      }
-    } catch (err) {
-      errors.push(
-        `Config validation failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
+  // Validate config — read from repository (handles both DB and file)
+  const cfg = getCachedConfig();
+  if (!cfg) {
+    warnings.push(
+      "No accounts config found. Run 'pi-antigravity-rotator login' to add your first account.",
+    );
   }
 
   // Validate state
-  if (dbActive) {
-    const state = getCachedState();
-    if (state && typeof state !== "object") {
-      warnings.push("State data in database is corrupted.");
-    }
-  } else {
-    try {
-      if (existsSync(statePath)) readJsonFile<PersistedState>(statePath);
-    } catch (err) {
-      errors.push(
-        `State file is corrupted: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
+  const state = getCachedState();
+  if (state && typeof state !== "object") {
+    warnings.push("Rotator state data is corrupted.");
   }
 
   // Validate token usage
-  if (dbActive) {
-    const usage = getCachedTokenUsage();
-    if (usage && typeof usage !== "object") {
-      warnings.push("Token usage data in database is corrupted.");
-    }
-  } else {
-    try {
-      if (existsSync(tokenUsagePath))
-        readJsonFile<TokenUsageTiered>(tokenUsagePath);
-    } catch (err) {
-      errors.push(
-        `Token usage file is corrupted: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
+  const usage = getCachedTokenUsage();
+  if (usage && typeof usage !== "object") {
+    warnings.push("Token usage data is corrupted.");
   }
 
   return {
@@ -119,14 +71,11 @@ export async function runDoctor(
     errors,
     info: {
       configDir,
-      accountsPath,
-      statePath,
-      tokenUsagePath,
       backupCount: listBackups().length,
       firstBackup: listBackups()[0] ?? null,
       adminTokenConfigured: !!getConfiguredAdminToken(env),
       bindHost: env.PI_ROTATOR_BIND_HOST ?? null,
-      databaseConfigured: dbActive,
+      storageBackend: isDbConfigured() ? "postgresql" : "file",
     },
   };
 }
