@@ -237,14 +237,13 @@ export function serveCliLogin(res: ServerResponse): void {
       `<h1>Add Account</h1>
 <p>This page works like the CLI login. Follow the steps below to add a Google account to the rotator.</p>
 
-<h3 style="margin:24px 0 8px;font-size:18px;">Step 1 — Sign in with Google</h3>
-<p>Open this URL in a new tab and complete the Google sign-in:</p>
-<div class="mono" id="authUrl">${authUrl}</div>
-<button class="cta" style="margin-top:10px;cursor:pointer;border:none;font-family:inherit;font-size:14px;" onclick="navigator.clipboard.writeText(document.getElementById('authUrl').textContent).then(()=>{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy URL',1500)})">
-  Copy URL
-</button>
+<h3 style="margin:24px 0 8px;font-size:18px;">Step 1 &mdash; Sign in with Google</h3>
+<p>Click the button below to open the Google sign-in page in a new tab:</p>
+<a class="cta" href="${authUrl}" target="_blank" rel="noopener" style="font-size:16px;">
+  Sign in with Google &nearr;
+</a>
 
-<h3 style="margin:24px 0 8px;font-size:18px;">Step 2 — Paste the redirect URL</h3>
+<h3 style="margin:24px 0 8px;font-size:18px;">Step 2 &mdash; Paste the redirect URL</h3>
 <p>After signing in, Google will redirect to <code>localhost</code> (which will fail — that's expected). Copy the <strong>full URL</strong> from your browser's address bar and paste it here:</p>
 <form id="pasteForm" style="margin-top:12px;">
   <input type="hidden" name="session" value="${sessionId}" />
