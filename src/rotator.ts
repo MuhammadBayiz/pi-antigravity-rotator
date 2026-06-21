@@ -2779,7 +2779,7 @@ export class AccountRotator {
     const account = this.accounts[idx];
     if (account.inFlightRequests > 0) {
       this.log(
-        `${email}: refusing to remove \u2014 ${account.inFlightRequests} in-flight requests`,
+        `${email}: refusing to remove - ${account.inFlightRequests} in-flight requests`,
         "warn",
       );
       return false;
@@ -2787,6 +2787,27 @@ export class AccountRotator {
     this.accounts.splice(idx, 1);
     const configIdx = this.config.accounts.findIndex((a) => a.email === email);
     if (configIdx >= 0) this.config.accounts.splice(configIdx, 1);
+
+    // Fix up modelState indices that may now be stale after the splice
+    for (const [, mState] of this.modelState.entries()) {
+      if (mState.activeAccountIndex > idx) {
+        mState.activeAccountIndex--;
+      } else if (mState.activeAccountIndex === idx) {
+        mState.activeAccountIndex =
+          this.accounts.length > 0
+            ? Math.min(mState.activeAccountIndex, this.accounts.length - 1)
+            : 0;
+      }
+    }
+    if (this.defaultIndex > idx) {
+      this.defaultIndex--;
+    } else if (
+      this.defaultIndex >= this.accounts.length &&
+      this.accounts.length > 0
+    ) {
+      this.defaultIndex = this.accounts.length - 1;
+    }
+
     removeAccountFromConfig(email);
     this.saveState();
     this.log(`${email}: account removed`);

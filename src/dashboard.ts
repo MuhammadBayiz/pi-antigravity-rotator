@@ -1697,7 +1697,7 @@ function renderAccounts(data) {
     healthGrid +
     '<div class="ops-buttons">' +
       '<button class="btn-secondary" onclick="refresh()">Refresh</button>' +
-      '<button class="btn-secondary" onclick="window.location.href=\'/login-cli\' + (ADMIN_TOKEN ? (\'?token=\' + encodeURIComponent(ADMIN_TOKEN)) : \'\')">Add Account</button>' +
+      '<button class="btn-secondary" onclick="openCliLogin()">Add Account</button>' +
       '<button class="btn-secondary" onclick="openRoutingInspectorModal()">Routing Inspector</button>' +
       '<button class="btn-secondary" onclick="openConfigEditorModal()">Config Editor</button>' +
       '<button class="btn-secondary" onclick="toggleFlagged()">' +
@@ -3101,6 +3101,10 @@ function confirmRemoveAccount(email) {
   if (confirm('Remove account ' + email + '? This cannot be undone.')) {
     removeAccount(email);
   }
+}
+
+function openCliLogin() {
+  window.location.href = '/login-cli' + (ADMIN_TOKEN ? ('?token=' + encodeURIComponent(ADMIN_TOKEN)) : '');
 }
 
 async function setFreshWindowStarts(enabled) {
