@@ -6,10 +6,7 @@
 // self-contained — callers no longer need to branch on isDbConfigured().
 
 import type { Config, PersistedState, TokenUsageTiered } from "./types.js";
-import type {
-  StoredResponseEntry,
-  PersistedResponsesStore,
-} from "./responses-store.js";
+import type { PersistedResponsesStore } from "./responses-store.js";
 import { validateConfig } from "./validators.js";
 import { applyConfigDefaults } from "./config-defaults.js";
 import {

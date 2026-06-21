@@ -45,6 +45,7 @@ export default [
       "coverage/**",
       ".github/**",
       "scripts/**",
+      "src/static/**",
     ],
   },
 ];

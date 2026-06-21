@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { getAccountsPath } from "./paths.js";
-import type { AccountConfig, Config } from "./types.js";
+import type { AccountConfig } from "./types.js";
 import { writeJsonFileAtomic } from "./storage.js";
 import {
   loadConfig,
