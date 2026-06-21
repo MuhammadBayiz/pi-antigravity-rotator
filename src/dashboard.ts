@@ -3104,7 +3104,7 @@ function confirmRemoveAccount(email) {
 }
 
 function openCliLogin() {
-  window.location.href = '/login-cli' + (ADMIN_TOKEN ? ('?token=' + encodeURIComponent(ADMIN_TOKEN)) : '');
+  window.open('/login-cli' + (ADMIN_TOKEN ? ('?token=' + encodeURIComponent(ADMIN_TOKEN)) : ''), '_blank');
 }
 
 async function setFreshWindowStarts(enabled) {
