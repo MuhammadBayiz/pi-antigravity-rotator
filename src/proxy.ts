@@ -33,6 +33,8 @@ import {
   serveAccountFreshWindowStartsApi,
   serveClearInFlightApi,
   serveClearBreakerApi,
+  serveKickstartApi,
+  serveAutoWarmupApi,
   serveStaticCss,
   serveStaticJs,
 } from "./dashboard.js";
@@ -1725,6 +1727,33 @@ export function startProxy(
       const email = decodeURIComponent(rest.slice(0, lastSlash));
       const enabled = rest.slice(lastSlash + 1) === "on";
       serveAccountFreshWindowStartsApi(res, rotator, email, enabled);
+      return;
+    }
+
+    if (method === "POST" && url.startsWith("/api/kickstart/")) {
+      if (!requireAdmin(req, res)) return;
+      const rest = url.slice("/api/kickstart/".length);
+      const firstSlash = rest.indexOf("/");
+      if (firstSlash >= 0) {
+        // /api/kickstart/:email/:modelKey
+        const email = decodeURIComponent(rest.slice(0, firstSlash));
+        const modelKey = decodeURIComponent(rest.slice(firstSlash + 1));
+        serveKickstartApi(res, rotator, email, modelKey);
+      } else {
+        // /api/kickstart/:email — kickstart all fresh timers
+        const email = decodeURIComponent(rest);
+        serveKickstartApi(res, rotator, email);
+      }
+      return;
+    }
+
+    if (
+      method === "POST" &&
+      (url === "/api/settings/auto-warmup/on" ||
+        url === "/api/settings/auto-warmup/off")
+    ) {
+      if (!requireAdmin(req, res)) return;
+      serveAutoWarmupApi(res, rotator, url.endsWith("/on"));
       return;
     }
 

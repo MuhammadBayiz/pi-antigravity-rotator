@@ -39,10 +39,20 @@ function renderQuotaBars(account) {
             jsString(account.email) +
             "', '" +
             jsString(q.modelKey) +
-            "')\">Clear</button>"
+            "'\")>Clear</button>"
           : '<button class="btn-clear-flight" title="No in-flight requests for ' +
             q.displayName +
             '" disabled>Clear</button>';
+      var kickstartBtn =
+        q.timerType === "fresh"
+          ? '<button class="btn-kickstart" title="Send minimal request to start idle timer for ' +
+            escapeHtml(q.displayName) +
+            '" onclick="kickstartTimer(\'' +
+            jsString(account.email) +
+            "', '" +
+            jsString(q.modelKey) +
+            "'\")>\u25b6 Start</button>"
+          : "";
       var color = quotaBarColor(q.percentRemaining);
       var timerClass = "timer-" + q.timerType;
       var resetLabel = "";
@@ -85,6 +95,7 @@ function renderQuotaBars(account) {
         "</span>" +
         '<span class="quota-action">' +
         clearButton +
+        kickstartBtn +
         "</span>" +
         "</div>"
       );
@@ -141,6 +152,9 @@ function renderAccounts(data) {
   var freshPolicyHint = controls.allowFreshWindowStarts
     ? "The rotator may start fresh windows when they are the best available option."
     : "Fresh windows are being held back. Timed 5h buckets still win first, timed 7d buckets still run, but the rotator will not open fresh windows until you re-enable them.";
+  var autoWarmupHint = controls.autoWarmupEnabled
+    ? "Auto-warmup is enabled. Accounts with the fresh-window override will automatically receive minimal kickstart requests each quota poll cycle."
+    : "Auto-warmup is disabled. Use the per-account \u25b6 Start buttons or the per-account Start Idle Timers button to kickstart timers manually.";
   var healthGrid =
     '<div class="health-grid">' +
     renderHealthPill("Available", health.availableCount || 0) +
@@ -203,6 +217,11 @@ function renderAccounts(data) {
       ? "Block Fresh Windows"
       : "Allow Fresh Windows") +
     "</button>" +
+    '<button class="btn-secondary" onclick="setAutoWarmup(' +
+    !controls.autoWarmupEnabled +
+    ')">' +
+    (controls.autoWarmupEnabled ? "Disable Auto-Warmup" : "Enable Auto-Warmup") +
+    "</button>" +
     (Object.keys(data.circuitBreakers.model || {}).length > 0 ||
     Object.keys(data.circuitBreakers.project || {}).length > 0
       ? '<button class="btn-secondary" style="border-color:var(--red);color:var(--red)" onclick="clearCircuitBreaker()">Reset All Circuit Breakers</button>'
@@ -210,6 +229,9 @@ function renderAccounts(data) {
     "</div>" +
     '<div class="ops-warning">' +
     freshPolicyHint +
+    "</div>" +
+    '<div class="ops-warning">' +
+    autoWarmupHint +
     "</div>";
 
   if (
@@ -446,6 +468,13 @@ function renderAccounts(data) {
           ? "Use Global Fresh Policy"
           : "Allow Fresh On This Account") +
         "</button>" +
+        ((a.quota || []).some(function (q) {
+          return q.timerType === "fresh";
+        })
+          ? '<button class="btn-enable" onclick="kickstartAllTimers(\'' +
+            jsString(a.email) +
+            "'\")>Start Idle Timers</button>"
+          : "") +
         '<button class="btn-enable" style="border-color:var(--red);color:var(--red)" onclick="confirmRemoveAccount(\'' +
         jsString(a.email) +
         "')\">Remove</button>" +
@@ -2468,6 +2497,56 @@ async function setFreshWindowStarts(enabled) {
     "/api/settings/fresh-window-starts/" + (enabled ? "on" : "off"),
     { method: "POST" },
   );
+  refresh();
+}
+
+async function setAutoWarmup(enabled) {
+  await authFetch(
+    "/api/settings/auto-warmup/" + (enabled ? "on" : "off"),
+    { method: "POST" },
+  );
+  refresh();
+}
+
+async function kickstartTimer(email, modelKey) {
+  var res = await authFetch(
+    "/api/kickstart/" +
+      encodeURIComponent(email) +
+      "/" +
+      encodeURIComponent(modelKey),
+    { method: "POST" },
+  );
+  var data = await res.json();
+  if (!data.ok) {
+    alert(
+      "Kickstart failed for " +
+        modelKey +
+        ": " +
+        (data.error || "status " + data.status),
+    );
+  }
+  refresh();
+}
+
+async function kickstartAllTimers(email) {
+  if (
+    !confirm(
+      "Send minimal requests to start all idle timers on " +
+        email +
+        "? One request per upstream model pool will be sent.",
+    )
+  )
+    return;
+  var res = await authFetch(
+    "/api/kickstart/" + encodeURIComponent(email),
+    { method: "POST" },
+  );
+  var data = await res.json();
+  if (data.error) {
+    alert("Kickstart failed: " + data.error);
+  } else if (data.results && data.results.length === 0) {
+    alert("No idle timers found for this account.");
+  }
   refresh();
 }
 

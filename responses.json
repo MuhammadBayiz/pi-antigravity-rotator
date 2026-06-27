@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "entries": [
+    [
+      "sync-1",
+      {
+        "response": {
+          "id": "sync-1",
+          "status": "completed"
+        },
+        "inputItems": [],
+        "conversationMessages": [],
+        "callIdToName": {
+          "call_sync-1": "toolA"
+        },
+        "expiresAt": 1782602693873
+      }
+    ]
+  ]
+}

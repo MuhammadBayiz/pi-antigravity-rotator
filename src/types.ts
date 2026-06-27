@@ -345,6 +345,7 @@ export interface PersistedState {
   protectivePauseUntil?: number;
   protectivePauseReason?: string | null;
   allowFreshWindowStarts?: boolean;
+  autoWarmupEnabled?: boolean;
   safety?: PersistedSafetyState;
   accounts: Record<
     string,
@@ -396,6 +397,7 @@ export interface StatusResponse {
   protectivePauseReason: string | null;
   operatorControls: {
     allowFreshWindowStarts: boolean;
+    autoWarmupEnabled: boolean;
   };
   security: {
     adminTokenConfigured: boolean;

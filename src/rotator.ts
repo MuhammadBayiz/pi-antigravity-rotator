@@ -21,6 +21,9 @@ import {
   TOKEN_URL,
   QUOTA_API_URL,
   QUOTA_USER_AGENT,
+  REQUEST_GOOG_API_CLIENT,
+  REQUEST_CLIENT_METADATA,
+  ANTIGRAVITY_ENDPOINTS,
   QUOTA_MODEL_KEYS,
   resolveQuotaModelKey,
   resolveDisplayModelKey,
@@ -67,6 +70,20 @@ function projectModelKey(projectId: string, modelKey: string): string {
   return `${projectId}::${modelKey}`;
 }
 
+// Maps each quota pool key to the cheapest upstream model to use for kickstart warmup requests.
+// gemini-3.5-flash and gemini-3.1-pro share the same upstream pool, so both map to gemini-3-flash.
+const KICKSTART_MODEL_FOR_QUOTA_POOL: Record<string, string> = {
+  "claude-opus-4-6-thinking": "gpt-oss-120b-medium",
+  "gemini-3.5-flash": "gemini-3-flash",
+  "gemini-3.1-pro": "gemini-3-flash",
+};
+
+// Reverse map: upstream model → the quota pool key it primarily represents (for deduplication).
+const QUOTA_POOL_FOR_KICKSTART_MODEL: Record<string, string> = {
+  "gpt-oss-120b-medium": "claude-opus-4-6-thinking",
+  "gemini-3-flash": "gemini-3.5-flash",
+};
+
 export class AccountRotator {
   private accounts: AccountRuntime[] = [];
   // Per-model active account tracking
@@ -102,6 +119,10 @@ export class AccountRotator {
     account: string;
   }> = [];
   private routingDiagnostics: Record<string, RoutingModelDiagnostics> = {};
+  private autoWarmupEnabled = false;
+  // Tracks upstream models already warmed-up this poll cycle per account (email → Set<upstreamModel>).
+  // Cleared at the start of each pollAllQuotas() to enforce the one-per-cycle guarantee.
+  private warmupSentThisCycle = new Map<string, Set<string>>();
   // Debounced state writer: batches multiple saveState() calls within a 1s window
   // to a single disk write. Hot paths (markError, recordRequest, etc.) call
   // scheduleStateSave() instead of saveState() to avoid blocking the event loop.
@@ -267,6 +288,7 @@ export class AccountRotator {
       this.protectivePauseUntil = state.protectivePauseUntil ?? 0;
       this.protectivePauseReason = state.protectivePauseReason ?? null;
       this.allowFreshWindowStarts = state.allowFreshWindowStarts ?? true;
+      this.autoWarmupEnabled = state.autoWarmupEnabled ?? false;
       this.safetyDay = state.safety?.day ?? currentUtcDay();
       this.projectRequests = state.safety?.projectRequests ?? {};
       this.projectModelBreakers = state.safety?.projectModelBreakers ?? {};
@@ -372,6 +394,7 @@ export class AccountRotator {
       protectivePauseUntil: this.protectivePauseUntil,
       protectivePauseReason: this.protectivePauseReason,
       allowFreshWindowStarts: this.allowFreshWindowStarts,
+      autoWarmupEnabled: this.autoWarmupEnabled,
       safety: {
         day: this.safetyDay,
         projectRequests: { ...this.projectRequests },
@@ -474,6 +497,9 @@ export class AccountRotator {
   }
 
   private async pollAllQuotas(): Promise<void> {
+    // Reset per-cycle warmup tracking so each poll cycle allows at most one warmup per upstream model per account.
+    this.warmupSentThisCycle.clear();
+
     const available = this.accounts.filter((a) => !a.disabled && !a.flagged);
     for (const account of available) {
       try {
@@ -481,6 +507,36 @@ export class AccountRotator {
         await this.fetchQuota(account);
       } catch {
         // Token refresh or quota fetch failed, skip this account
+      }
+
+      // Auto-warmup: send minimal kickstart requests for idle (fresh) pools on accounts that
+      // have opted in via allowFreshWindowStartsOverride, but only if the operator has enabled
+      // the global auto-warmup toggle. Deduplicates by upstream model within this cycle.
+      if (this.autoWarmupEnabled && account.allowFreshWindowStartsOverride) {
+        const freshPools = account.quota.filter((q) => q.timerType === "fresh");
+        if (freshPools.length > 0) {
+          const alreadySent =
+            this.warmupSentThisCycle.get(account.config.email) ?? new Set<string>();
+          // Build deduplicated upstream model list
+          const upstreamToQuotaKey = new Map<string, string>();
+          for (const q of freshPools) {
+            const upstream = KICKSTART_MODEL_FOR_QUOTA_POOL[q.modelKey] ?? q.modelKey;
+            if (!upstreamToQuotaKey.has(upstream)) {
+              const primaryKey = QUOTA_POOL_FOR_KICKSTART_MODEL[upstream] ?? q.modelKey;
+              upstreamToQuotaKey.set(upstream, primaryKey);
+            }
+          }
+          for (const [upstream, quotaKey] of upstreamToQuotaKey) {
+            if (!alreadySent.has(upstream)) {
+              alreadySent.add(upstream);
+              // Fire-and-forget — errors are handled internally by kickstartTimerForAccount
+              void this.kickstartTimerForAccount(account.config.email, quotaKey).catch(
+                () => {},
+              );
+            }
+          }
+          this.warmupSentThisCycle.set(account.config.email, alreadySent);
+        }
       }
     }
 
@@ -2228,6 +2284,19 @@ export class AccountRotator {
     return true;
   }
 
+  setAutoWarmup(enabled: boolean): boolean {
+    if (this.autoWarmupEnabled === enabled) return false;
+    this.autoWarmupEnabled = enabled;
+    this.saveState();
+    this.log(
+      enabled
+        ? "Operator enabled auto-warmup; accounts with fresh-window override will automatically receive minimal kickstart requests on each quota poll"
+        : "Operator disabled auto-warmup; no automatic kickstart requests will be sent",
+      "warn",
+    );
+    return true;
+  }
+
   clearModelBreaker(modelKey: string): boolean {
     const now = Date.now();
     const hasModelBreaker = (this.modelBreakers[modelKey] ?? 0) > now;
@@ -2588,6 +2657,7 @@ export class AccountRotator {
         : null,
       operatorControls: {
         allowFreshWindowStarts: this.allowFreshWindowStarts,
+        autoWarmupEnabled: this.autoWarmupEnabled,
       },
       security: {
         adminTokenConfigured: !!getConfiguredAdminToken(),
@@ -3060,5 +3130,180 @@ export class AccountRotator {
       disabledCount,
       errorCount,
     };
+  }
+
+  /**
+   * Send a minimal single-token request to the upstream Antigravity endpoint for a specific
+   * quota pool key on a given account. Uses the cheapest model in that pool to minimise cost.
+   * Applies normal error handling (markExhausted, markFlagged, markError) so the account state
+   * stays consistent with regular traffic.
+   */
+  async kickstartTimerForAccount(
+    email: string,
+    quotaModelKey: string,
+  ): Promise<{ ok: boolean; status: number; upstreamModel: string; error?: string }> {
+    const account = this.accounts.find((a) => a.config.email === email);
+    if (!account) {
+      return { ok: false, status: 404, upstreamModel: "", error: "account not found" };
+    }
+    if (account.disabled || account.flagged) {
+      return {
+        ok: false,
+        status: 409,
+        upstreamModel: "",
+        error: account.disabled ? "account disabled" : "account flagged",
+      };
+    }
+
+    try {
+      await this.ensureValidToken(account);
+    } catch (err) {
+      return {
+        ok: false,
+        status: 401,
+        upstreamModel: "",
+        error: `token refresh failed: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+
+    if (!account.accessToken) {
+      return { ok: false, status: 401, upstreamModel: "", error: "no access token" };
+    }
+
+    const upstreamModel =
+      KICKSTART_MODEL_FOR_QUOTA_POOL[quotaModelKey] ?? quotaModelKey;
+
+    const body = JSON.stringify({
+      project: account.config.projectId,
+      model: upstreamModel,
+      request: {
+        contents: [{ role: "user", parts: [{ text: "." }] }],
+        generationConfig: { maxOutputTokens: 1 },
+      },
+    });
+
+    const endpoint = ANTIGRAVITY_ENDPOINTS[ANTIGRAVITY_ENDPOINTS.length - 1];
+    const url = `${endpoint}/v1internal:streamGenerateContent?alt=sse`;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15_000);
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${account.accessToken}`,
+          "User-Agent": QUOTA_USER_AGENT,
+          "X-Goog-Api-Client": REQUEST_GOOG_API_CLIENT,
+          "Client-Metadata": REQUEST_CLIENT_METADATA,
+        },
+        body,
+        signal: controller.signal,
+      });
+    } catch (err) {
+      clearTimeout(timeout);
+      const msg = `kickstart network error: ${err instanceof Error ? err.message : String(err)}`;
+      this.markError(account, msg);
+      return { ok: false, status: 0, upstreamModel, error: msg };
+    }
+    clearTimeout(timeout);
+
+    // Consume and discard the response body to free the connection
+    try {
+      await response.body?.cancel();
+    } catch {
+      // ignore
+    }
+
+    const label = account.config.label || account.config.email;
+
+    if (response.status === 429) {
+      const cooldownMs = 60_000;
+      this.markExhausted(account, quotaModelKey, cooldownMs, "kickstart 429");
+      this.recordProvider429(account, quotaModelKey, cooldownMs);
+      this.log(
+        `${label} [${quotaModelKey}]: kickstart 429 — cooldown ${cooldownMs / 1000}s`,
+        "warn",
+      );
+      return { ok: false, status: 429, upstreamModel };
+    }
+
+    if (response.status === 401 || response.status === 403) {
+      this.markFlagged(
+        account,
+        `kickstart ${response.status} on ${upstreamModel}`,
+        { triggerProtectivePause: false },
+      );
+      return { ok: false, status: response.status, upstreamModel };
+    }
+
+    if (response.status >= 500) {
+      this.markError(account, `kickstart ${response.status} on ${upstreamModel}`);
+      return { ok: false, status: response.status, upstreamModel };
+    }
+
+    if (response.ok) {
+      this.recordRequest(account, quotaModelKey);
+      this.log(
+        `${label} [${quotaModelKey}]: kickstart sent via ${upstreamModel} — timer should start within the next quota poll`,
+      );
+    }
+
+    return { ok: response.ok, status: response.status, upstreamModel };
+  }
+
+  /**
+   * Kickstart all quota pools that are currently idle (timerType === "fresh") for a given
+   * account. Deduplicates by upstream model so that pools sharing the same upstream
+   * (e.g. gemini-3.5-flash and gemini-3.1-pro → gemini-3-flash) only receive one request.
+   */
+  async kickstartAllFreshTimers(email: string): Promise<{
+    ok: boolean;
+    error?: string;
+    results: Array<{
+      quotaPools: string[];
+      upstreamModel: string;
+      ok: boolean;
+      status: number;
+    }>;
+  }> {
+    const account = this.accounts.find((a) => a.config.email === email);
+    if (!account) {
+      return { ok: false, error: "account not found", results: [] };
+    }
+
+    const freshPools = account.quota.filter((q) => q.timerType === "fresh");
+    if (freshPools.length === 0) {
+      return { ok: true, results: [] };
+    }
+
+    // Deduplicate: group quota pool keys by their upstream model
+    const upstreamToQuotaPools = new Map<string, string[]>();
+    for (const q of freshPools) {
+      const upstream = KICKSTART_MODEL_FOR_QUOTA_POOL[q.modelKey] ?? q.modelKey;
+      const list = upstreamToQuotaPools.get(upstream) ?? [];
+      list.push(q.modelKey);
+      upstreamToQuotaPools.set(upstream, list);
+    }
+
+    const results: Array<{
+      quotaPools: string[];
+      upstreamModel: string;
+      ok: boolean;
+      status: number;
+    }> = [];
+
+    for (const [upstreamModel, quotaPools] of upstreamToQuotaPools) {
+      // Use the primary quota pool key for this upstream (for recordRequest/markExhausted)
+      const primaryQuotaKey =
+        QUOTA_POOL_FOR_KICKSTART_MODEL[upstreamModel] ?? quotaPools[0];
+      const result = await this.kickstartTimerForAccount(email, primaryQuotaKey);
+      results.push({ quotaPools, upstreamModel, ok: result.ok, status: result.status });
+    }
+
+    const allOk = results.every((r) => r.ok);
+    return { ok: allOk, results };
   }
 }

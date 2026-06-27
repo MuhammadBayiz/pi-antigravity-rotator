@@ -197,6 +197,41 @@ export function serveClearBreakerApi(
   res.end(JSON.stringify({ ok: true }));
 }
 
+export function serveKickstartApi(
+  res: ServerResponse,
+  rotator: AccountRotator,
+  email: string,
+  modelKey?: string,
+): void {
+  if (modelKey) {
+    rotator.kickstartTimerForAccount(email, modelKey).then((result) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(result));
+    }).catch((err) => {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: String(err) }));
+    });
+  } else {
+    rotator.kickstartAllFreshTimers(email).then((result) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(result));
+    }).catch((err) => {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: String(err), results: [] }));
+    });
+  }
+}
+
+export function serveAutoWarmupApi(
+  res: ServerResponse,
+  rotator: AccountRotator,
+  enabled: boolean,
+): void {
+  const changed = rotator.setAutoWarmup(enabled);
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ ok: true, changed, autoWarmupEnabled: enabled }));
+}
+
 const DASHBOARD_HTML = `<!DOCTYPE html>
 <html lang="en">
 <head>

@@ -89,6 +89,8 @@ describe("dashboard", () => {
       "/api/clear-breaker/",
       "/api/settings/fresh-window-starts/",
       "/api/account-fresh-window-starts/",
+      "/api/settings/auto-warmup/",
+      "/api/kickstart/",
       "/api/self-update",
     ];
     for (const endpoint of endpoints) {
