@@ -1022,10 +1022,10 @@ var MODEL_PRICING_CLIENT = {
   "gemini-3.1-pro-low": { input: 2.0, output: 12.0 },
   "gemini-3.1-pro-high": { input: 2.0, output: 12.0 },
   "gemini-3-flash": { input: 0.5, output: 3.0 },
-  "gemini-3.5-flash": { input: 0.5, output: 3.0 },
-  "gemini-3.5-flash-low": { input: 0.5, output: 3.0 },
-  "gemini-3.5-flash-medium": { input: 0.5, output: 3.0 },
-  "gemini-3.5-flash-high": { input: 0.5, output: 3.0 },
+  "gemini-3.5-flash": { input: 1.5, output: 9.0 },
+  "gemini-3.5-flash-low": { input: 1.5, output: 9.0 },
+  "gemini-3.5-flash-medium": { input: 1.5, output: 9.0 },
+  "gemini-3.5-flash-high": { input: 1.5, output: 9.0 },
   "gpt-oss-120b-medium": { input: 2.0, output: 10.0 },
 };
 
