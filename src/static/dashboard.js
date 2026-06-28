@@ -61,15 +61,7 @@ function renderQuotaBars(account) {
             q.displayName +
             '" disabled>Clear</button>';
       var idle = isIdleForKickstart(q, now);
-      var kickstartBtn = idle
-        ? '<button class="btn-kickstart" title="Send minimal request to start idle timer for ' +
-          escapeHtml(q.displayName) +
-          '" onclick="kickstartTimer(\'' +
-          jsString(account.email) +
-          "', '" +
-          jsString(q.modelKey) +
-          "'\")>\u25b6 Start</button>"
-        : "";
+      var kickstartBtn = "";
       var color = quotaBarColor(q.percentRemaining);
       var timerClass = "timer-" + q.timerType;
       var resetLabel = "";
