@@ -44,6 +44,7 @@ import { logger } from "./logger.js";
 import { getUpdateInfo } from "./version-check.js";
 import { getNotifications } from "./notification-poller.js";
 import { getConfiguredAdminToken } from "./admin-auth.js";
+import { getProxyExposureWarning } from "./exposure.js";
 import {
   getCachedState,
   setCachedState,
@@ -2655,6 +2656,11 @@ export class AccountRotator {
       }
     }
 
+    const adminWarning = getConfiguredAdminToken()
+      ? null
+      : `Admin routes are exposed on ${this.config.bindHost}:${this.config.proxyPort} because PI_ROTATOR_ADMIN_TOKEN is not configured.`;
+    const proxyWarning = getProxyExposureWarning(this.config);
+
     return {
       version: updateInfo.currentVersion,
       proxyPort: this.config.proxyPort,
@@ -2676,9 +2682,7 @@ export class AccountRotator {
       },
       security: {
         adminTokenConfigured: !!getConfiguredAdminToken(),
-        warning: getConfiguredAdminToken()
-          ? null
-          : `Admin routes are exposed on ${this.config.bindHost}:${this.config.proxyPort} because PI_ROTATOR_ADMIN_TOKEN is not configured.`,
+        warning: [adminWarning, proxyWarning].filter(Boolean).join(" ") || null,
         bindHost: this.config.bindHost || "0.0.0.0",
       },
       routingDiagnostics,

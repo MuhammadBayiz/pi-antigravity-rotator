@@ -24,6 +24,7 @@ import { setModelAliasesOverride } from "./types.js";
 import { writeTextFileAtomic } from "./storage.js";
 import { initDb } from "./db-store.js";
 import { stopPendingSessionReaper } from "./onboarding.js";
+import { getProxyExposureWarning } from "./exposure.js";
 
 function loadConfig(): Config {
   try {
@@ -146,6 +147,16 @@ function maybeWarnAboutAdminExposure(config: Config): void {
   console.warn();
 }
 
+function maybeWarnAboutProxyExposure(config: Config): void {
+  const warning = getProxyExposureWarning(config);
+  if (!warning) return;
+  console.warn(`WARNING: ${warning}`);
+  console.warn(
+    "WARNING: PI_ROTATOR_ADMIN_TOKEN protects dashboard/admin APIs, but not the native or /v1 proxy routes.",
+  );
+  console.warn();
+}
+
 export async function main(): Promise<void> {
   console.log("=== Pi Antigravity Rotator ===");
   console.log();
@@ -181,6 +192,7 @@ export async function main(): Promise<void> {
   maybeShowStarNudge();
   bootstrapAdminToken();
   maybeWarnAboutAdminExposure(config);
+  maybeWarnAboutProxyExposure(config);
   warnIfUsingFallbackOAuthCreds();
   warnIfInsecureTelemetryEndpoint();
   setModelSpecsOverride(config.modelSpecs ?? null);

@@ -9,8 +9,10 @@
 //   - Flag events: HTTP status, matched patterns, model, pool state,
 //     request velocity — everything needed to improve the anti-flag algorithm
 //
-// What we NEVER collect:
-//   - Emails, tokens, IPs, project IDs, request bodies, error message text
+// What we NEVER include in telemetry payloads or event files:
+//   - Emails, tokens, project IDs, request bodies, error message text
+// Source IPs are not part of the JSON telemetry payload, but the receiver and
+// network path can observe them for transport and rate limiting.
 //
 // Docs: https://github.com/tuxevil/pi-antigravity-rotator#telemetry
 
@@ -129,8 +131,8 @@ function printTelemetryNotice(): void {
 	console.log();
 	console.log("  ╭──────────────────────────────────────────────────────────╮");
 	console.log("  │  Anonymous telemetry is enabled to help improve the      │");
-	console.log("  │  rotator. No emails, tokens, IPs, or personal data is   │");
-	console.log("  │  collected — only aggregate usage stats.                 │");
+	console.log("  │  rotator. No emails, tokens, project IDs, request bodies │");
+	console.log("  │  or error text are sent — only aggregate usage stats.    │");
 	console.log("  │                                                          │");
 	console.log("  │  Flag events help us improve the anti-flag algorithm     │");
 	console.log("  │  for everyone. Consider keeping telemetry on!            │");
@@ -182,7 +184,7 @@ export interface TelemetryPayload {
 // This is the most important telemetry signal — it drives anti-flag
 // algorithm improvements that benefit all users.
 //
-// NO PII: no email, no error text, no IP, no projectId.
+// NO PII in the payload: no email, no error text, no projectId, no request body.
 // Only structured, anonymous context about what happened.
 export interface FlagEventData {
 	// What triggered it

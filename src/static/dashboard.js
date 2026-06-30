@@ -840,8 +840,9 @@ function renderAttentionPanel(data) {
         "Security warning",
         security.warning,
         [
-          "Set PI_ROTATOR_ADMIN_TOKEN to protect dashboard and admin APIs.",
-          "For local-only usage, prefer bindHost 127.0.0.1.",
+          "Dashboard and admin APIs require the admin token.",
+          "Native and /v1 proxy routes do not require a token.",
+          "For local-only usage, set bindHost to 127.0.0.1 or bind the Docker port to 127.0.0.1.",
         ],
         "warning",
       ),

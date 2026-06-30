@@ -71,7 +71,7 @@ To donate a quota-enabled account safely:
 - **Auto-Warmup & Kickstart** -- Automatically detects idle quota pools (100% quota with a full reset time) and sends a minimal request to kickstart the 5h/7d window
 - **Protective pause** -- Pauses all routing for several hours after serious ToS/abuse-style flags so the rest of the pool is not burned
 - **Token auto-refresh** -- Tokens are refreshed automatically before expiry; no manual management
-- **Endpoint cascade** -- Tries daily, autopush, and prod API endpoints for resilience
+- **Endpoint fallback support** -- Uses the verified daily Cloud Code Assist endpoint by default; the forwarder supports endpoint cascading if additional verified upstream endpoints are configured in future releases
 - **Advanced Telemetry & Statistics** -- Track exactly how much USD you save compared to a paid API plan, predict quota depletion with the Forecast grid, view Latency tracking (p50/p95), and explore 60-day historical usage heatmaps
 - **Web dashboard** -- Real-time view of model routing table, per-account quota bars with per-model timers, and flagged account alerts
 - **Auto-update notifications** -- The dashboard checks npm for new releases every 30 minutes and shows a banner with one-click update when a newer version is available
@@ -79,6 +79,8 @@ To donate a quota-enabled account safely:
 - **State persistence** -- Survives restarts; routing assignments, per-model request counters, cooldowns, and flags are saved to disk
 
 ## Quick Start
+
+Requirements for npm/source installs: Node.js 22 or newer. The published package runs the TypeScript sources through `tsx` at runtime, so `tsx` is intentionally listed as a production dependency. The Docker image uses Node 22.
 
 ### Option A: Install from npm
 
@@ -109,10 +111,11 @@ npm start
 ### Option C: Docker
 
 ```bash
+mkdir -p docker-data
 docker compose up -d
 ```
 
-The included compose file persists runtime data under `./docker-data` and sets `PI_ROTATOR_DIR=/data`.
+The Docker image installs production dependencies only and runs as the non-root `node` user (UID/GID 1000). The included compose file persists runtime data under `./docker-data`, sets `PI_ROTATOR_DIR=/data`, and publishes the proxy on `127.0.0.1:51200` by default. On Linux, make sure `docker-data` is writable by UID 1000 if your host user differs. If you need LAN access, change the compose port mapping to `51200:51200` only on a trusted network or behind a firewall/reverse proxy.
 
 ## Adding Accounts
 
@@ -152,7 +155,7 @@ If login fails at project discovery:
 
 ## Dashboard
 
-After starting the proxy, open `http://localhost:51200/dashboard` or `http://<your-server-ip>:51200/dashboard` from any machine on the same network (the proxy binds to `0.0.0.0`).
+After starting the proxy, open `http://localhost:51200/dashboard`. Native npm starts bind to `0.0.0.0` unless you set `PI_ROTATOR_BIND_HOST` or `bindHost`; the Docker compose example publishes only `127.0.0.1:51200` on the host by default. Use `http://<your-server-ip>:51200/dashboard` only after deliberately exposing the port on a trusted LAN, firewall, or reverse proxy.
 
 If `PI_ROTATOR_ADMIN_TOKEN` is unset, the proxy automatically generates a cryptographically secure token on first run and saves it to a `.admin-token` file in the root directory. This token will be printed to the console on first startup. You must append `?token=<your-token>` to the dashboard URL to access it, or set `PI_ROTATOR_ADMIN_TOKEN` in your environment to override it.
 
@@ -186,7 +189,7 @@ Agent 3 (Flash)       --->  localhost:51200  --->  Account A
 2. The proxy resolves the model to a quota key (e.g., `gemini-3.1-pro`)
 3. The best available account for that specific model is selected
 4. The `Authorization` header and `project` field are swapped with real credentials
-5. The request is forwarded (trying daily, autopush, then prod endpoints)
+5. The request is forwarded to the configured Antigravity endpoint (the verified daily endpoint by default; cascade applies only if additional verified endpoints are configured)
 6. The SSE response streams back to the agent transparently
 
 ### Per-Model Account Selection
@@ -244,7 +247,7 @@ The proxy detects blocked/suspended accounts at three levels:
 
 1. **Quota API check** (initial poll + every poll) -- If the quota API returns `401` or `403`, the account is immediately flagged.
 
-2. **API 401** (on request) -- If the prod endpoint rejects the token with `401 UNAUTHENTICATED`, the account is flagged.
+2. **API 401** (on request) -- If the upstream endpoint rejects the token with `401 UNAUTHENTICATED`, the account is flagged.
 
 3. **API 403** (on request) -- If the response body contains enforcement keywords such as `infring`, `suspend`, `abus`, `terminat`, `violat`, `banned`, `policy`, `forbidden`, or `verif`, the account is flagged.
 
@@ -311,13 +314,13 @@ pi-antigravity-rotator start --config-dir /path/to/config
 
 New v2.0 config fields:
 
-- `bindHost`: interface to bind on. Default: `0.0.0.0`.
+- `bindHost`: interface to bind on. Default: `0.0.0.0`. For local-only use, set `PI_ROTATOR_BIND_HOST=127.0.0.1` or `"bindHost": "127.0.0.1"`.
 - `routingPolicy`: current default is `timer-first`. Optional values now include `tier-first`, `quota-first`, and `hybrid`.
 - `tokenBucketEnabled`: enables the local per-account request bucket used by `hybrid`. Default: `false`.
 - `tokenBucketMaxTokens`: bucket capacity when enabled. Default: `50`.
 - `tokenBucketRefillPerMinute`: refill speed when enabled. Default: `6`.
 - `tokenBucketInitialTokens`: startup fill level when enabled. Default: `50`.
-- `accounts[].tier`: optional `ultra`, `pro`, `free`, or `unknown`.
+- `accounts[].tier`: optional `ultra`, `pro`, `plus`, `free`, or `unknown`.
 
 ## Doctor
 
@@ -419,7 +422,7 @@ Login now fails if Google does not return a project ID. No shared fallback.
 | `POST` | `/v1/chat/completions` | OpenAI-compatible non-streaming chat adapter |
 | `POST` | `/v1/messages` | Anthropic-compatible non-streaming messages adapter |
 
-Dashboard and internal `/api/*` requests must include either `Authorization: Bearer <token>`, `X-Rotator-Admin-Token: <token>`, or `?token=<token>` for browser dashboard access. The native pi proxy endpoint and compatibility adapters (`/v1/*`) remain unauthenticated by design, so your AI agents and existing clients will keep working without requiring a token. Put this service behind a trusted local boundary if exposing beyond localhost/LAN.
+Dashboard and internal `/api/*` requests must include either `Authorization: Bearer <token>`, `X-Rotator-Admin-Token: <token>`, or `?token=<token>` for browser dashboard access. The native pi proxy endpoint and compatibility adapters (`/v1/*`) remain unauthenticated by design, so your AI agents and existing clients will keep working without requiring a token. `PI_ROTATOR_ADMIN_TOKEN` does **not** protect those proxy routes. Put this service behind a trusted local boundary, firewall, or reverse proxy if exposing beyond localhost/LAN.
 
 ### Compatibility Adapters
 
@@ -531,11 +534,12 @@ To connect Codex to your local rotator:
 
 ```bash
 npm run typecheck
+npm run typecheck:test
 npm test
 npm run check
 ```
 
-The test suite covers model resolution contracts and dashboard render/syntax smoke checks.
+`npm run typecheck` checks runtime source under `src/`; `npm run typecheck:test` also checks test helpers and mocks under `test/`. The test suite covers model resolution contracts and dashboard render/syntax smoke checks.
 
 ## Running as a Service
 
@@ -603,14 +607,15 @@ The dashboard shows both raw `Flag Events` and deduped `Unique Flag Incidents` s
 
 Flag data is the most valuable signal. It lets us study what behavior patterns lead to flags and improve the rotation algorithm to avoid them — benefiting everyone.
 
-### What is NEVER collected
+### What is not included in telemetry payloads
 
 - ❌ Email addresses
 - ❌ OAuth tokens or API keys
-- ❌ IP addresses
 - ❌ Google project IDs
 - ❌ Request/response bodies
 - ❌ Error message text (only which known keywords matched)
+
+IP addresses are not part of the telemetry JSON payload and are not written to telemetry event files. The receiver and network path can still observe the source IP for transport and in-memory rate limiting, and the default telemetry endpoint uses plain HTTP. Set `PI_ROTATOR_TELEMETRY=off` to disable telemetry, or set `PI_ROTATOR_TELEMETRY_URL` to an HTTPS endpoint you control.
 
 ### Endpoint
 

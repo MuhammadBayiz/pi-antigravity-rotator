@@ -1,8 +1,9 @@
-import { describe, it, before } from "node:test";
+import { describe, it, before, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { AccountRotator } from "../src/rotator.js";
 import type { Config } from "../src/types.js";
 import { initDb } from "../src/db-store.js";
+import { setPersistedAdminToken } from "../src/admin-auth.js";
 
 function makeConfig(): Config {
   return {
@@ -36,6 +37,10 @@ function makeConfig(): Config {
 describe("v2 routing and status", () => {
   before(async () => {
     await initDb();
+  });
+
+  afterEach(() => {
+    setPersistedAdminToken(null);
   });
 
   it("keeps timer-first routing and uses tier as a tie-breaker", () => {
@@ -72,6 +77,30 @@ describe("v2 routing and status", () => {
     const status = rotator.getStatus();
     assert.equal(status.security.adminTokenConfigured, false);
     assert.match(status.security.warning || "", /PI_ROTATOR_ADMIN_TOKEN/);
+  });
+
+  it("surfaces proxy exposure warnings even when admin auth is configured", () => {
+    setPersistedAdminToken("secret");
+    const rotator = new AccountRotator(makeConfig());
+    rotator.stopQuotaPolling();
+    const status = rotator.getStatus();
+    assert.equal(status.security.adminTokenConfigured, true);
+    assert.match(status.security.warning || "", /proxy routes are unauthenticated/);
+    assert.doesNotMatch(
+      status.security.warning || "",
+      /PI_ROTATOR_ADMIN_TOKEN is not configured/,
+    );
+  });
+
+  it("does not warn for loopback binds when admin auth is configured", () => {
+    setPersistedAdminToken("secret");
+    const config = makeConfig();
+    config.bindHost = "127.0.0.1";
+    const rotator = new AccountRotator(config);
+    rotator.stopQuotaPolling();
+    const status = rotator.getStatus();
+    assert.equal(status.security.adminTokenConfigured, true);
+    assert.equal(status.security.warning, null);
   });
 
   it("supports quota-first policy when configured", () => {

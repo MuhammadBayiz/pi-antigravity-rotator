@@ -7,6 +7,13 @@ import {
 	normalizeOpenAIResponsesRequest,
 } from "../src/compat/translators.js";
 
+type AntigravityBodyWithRequest = ReturnType<typeof openAIToAntigravityBody> & {
+	request: {
+		systemInstruction?: unknown;
+		contents?: unknown;
+	};
+};
+
 describe("translators component", () => {
 	it("normalizes OpenAI Responses prompt into input", () => {
 		const normalized = normalizeOpenAIResponsesRequest({
@@ -23,7 +30,7 @@ describe("translators component", () => {
 				{ role: "system", content: "be terse" },
 				{ role: "user", content: "ping" },
 			],
-		});
+		}) as AntigravityBodyWithRequest;
 		assert.equal(body.model, "claude-sonnet-4-6");
 		assert.equal(body.project, "compat-placeholder");
 		assert.equal(body.userAgent, "antigravity");
@@ -44,7 +51,7 @@ describe("translators component", () => {
 			messages: [
 				{ role: "user", content: "hello" },
 			],
-		});
+		}) as AntigravityBodyWithRequest;
 		assert.equal(body.model, "claude-sonnet-4-6");
 		assert.deepEqual(body.request.systemInstruction, {
 			role: "system",

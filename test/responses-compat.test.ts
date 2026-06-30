@@ -124,16 +124,22 @@ function requestStream(method: string, url: string, payload?: unknown): Incoming
 }
 
 function responseStub(): ResponseStub {
+	let headersSent = false;
+	let writableEnded = false;
 	const res = {
 		statusCodeCaptured: 0,
 		headersCaptured: {},
 		body: "",
-		headersSent: false,
-		writableEnded: false,
+		get headersSent() {
+			return headersSent;
+		},
+		get writableEnded() {
+			return writableEnded;
+		},
 		writeHead(status: number, headers: Record<string, string>) {
 			this.statusCodeCaptured = status;
 			this.headersCaptured = headers;
-			this.headersSent = true;
+			headersSent = true;
 			return this;
 		},
 		write(chunk: string) {
@@ -142,7 +148,7 @@ function responseStub(): ResponseStub {
 		},
 		end(chunk?: string) {
 			if (chunk) this.body += chunk;
-			this.writableEnded = true;
+			writableEnded = true;
 			return this;
 		},
 	} as ResponseStub;

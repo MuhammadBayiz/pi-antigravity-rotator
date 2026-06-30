@@ -213,10 +213,11 @@ describe("telemetry", () => {
 		it("only includes known flag patterns", () => {
 			const reporter = new TelemetryReporter(mockMetrics);
 			const payload = reporter._buildFlagPayloadForTest(sampleFlagData);
+			const knownPatterns = new Set<string>([...FLAG_PATTERNS, "blocked_401"]);
 
 			for (const pattern of payload.flag.flagPatternsMatched) {
 				assert.ok(
-					FLAG_PATTERNS.includes(pattern as any) || pattern === "blocked_401",
+					knownPatterns.has(pattern),
 					`Unknown pattern: ${pattern}`,
 				);
 			}
@@ -321,4 +322,3 @@ describe("warnIfInsecureTelemetryEndpoint", () => {
 		}
 	});
 });
-

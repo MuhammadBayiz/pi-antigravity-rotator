@@ -3,7 +3,7 @@ services:
     build: .
     container_name: pi-antigravity-rotator
     ports:
-      - "51200:51200"
+      - "127.0.0.1:51200:51200"
     environment:
       PI_ROTATOR_DIR: /data
       PI_ROTATOR_TELEMETRY: "on"

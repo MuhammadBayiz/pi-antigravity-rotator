@@ -611,9 +611,10 @@ export const CLIENT_SECRET = atob(
 );
 export const TOKEN_URL = "https://oauth2.googleapis.com/token";
 
+// Production default: use the daily Cloud Code Assist endpoint. The proxy
+// forwarder supports cascading if additional verified endpoints are added here.
 export const ANTIGRAVITY_ENDPOINTS = [
   "https://daily-cloudcode-pa.googleapis.com",
-  // "https://cloudcode-pa.googleapis.com",
 ] as const;
 
 export const QUOTA_API_URL =

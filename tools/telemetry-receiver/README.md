@@ -113,7 +113,8 @@ curl -H "Authorization: Bearer YOUR_STATS_TOKEN" https://telemetry.yourdomain.co
 
 ## Security
 
-- **No PII is stored**: no emails, tokens, IPs, project IDs
+- **No PII is stored in telemetry event files**: no emails, tokens, project IDs, request bodies, or error text
+- Source IPs are used transiently for in-memory rate limiting and may be visible to your network, host, or reverse-proxy logs. The receiver does not write IPs into telemetry JSONL event files.
 - Email-pattern detection in validation: payloads containing `@` email patterns are rejected
 - Payloads capped at 4KB
 - Rate limited: 12 req/min per IP

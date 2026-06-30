@@ -7,14 +7,18 @@
   "bin": {
     "pi-antigravity-rotator": "bin/pi-antigravity-rotator.js"
   },
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "start": "tsx src/cli.ts start",
     "login": "tsx src/cli.ts login",
     "typecheck": "tsc --noEmit",
+    "typecheck:test": "tsc --project tsconfig.test.json",
     "test": "PI_ROTATOR_DIR=/tmp/pi-rotator-test node --import tsx/esm --test \"test/**/*.test.ts\"",
     "lint": "eslint src test",
     "coverage": "c8 --reporter=text --reporter=html npm test",
-    "check": "npm run typecheck && npm test && npm run lint"
+    "check": "npm run typecheck && npm run typecheck:test && npm test && npm run lint"
   },
   "files": [
     "bin/",
@@ -43,15 +47,15 @@
   "author": "Sebastián Real (tuxevil)",
   "dependencies": {
     "pg": "^8.22.0",
-    "tsx": "^4.19.0"
+    "tsx": "^4.22.4"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@types/node": "^22.0.0",
+    "@types/node": "^22.20.0",
     "@types/pg": "^8.20.0",
     "c8": "^11.0.0",
-    "eslint": "^10.5.0",
+    "eslint": "^10.6.0",
     "typescript": "^5.7.0",
-    "typescript-eslint": "^8.61.1"
+    "typescript-eslint": "^8.62.1"
   }
 }
