@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.3.1] - 2026-06-30
+
 ### Improved
 - **Accurate Quota Forecast**: Replaced the simple arithmetic average of pool quota with a weighted calculation based on each account's Tier capacity (Ultra/Pro/Plus/Free). The Dashboard's time remaining and percentage estimates are now mathematically accurate for mixed-tier deployments. (PR [#14](https://github.com/tuxevil/pi-antigravity-rotator/pull/14) by [@josenicomaia](https://github.com/josenicomaia))
 
