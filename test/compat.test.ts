@@ -402,6 +402,44 @@ describe("compat adapters", () => {
 		assert.ok(responseIdx < noteIdx);
 	});
 
+	it("does not send Claude assistant prefill when history ends with assistant text", () => {
+		const body = openAIToAntigravityBody({
+			model: "claude-sonnet-4-6",
+			messages: [
+				{ role: "user", content: "Explain pi briefly." },
+				{ role: "assistant", content: "Pi is" },
+			],
+		});
+
+		const contents = (body.request as { contents: Array<{ role: string }> }).contents;
+		assert.notEqual(contents.at(-1)?.role, "model");
+		assert.doesNotMatch(JSON.stringify(body.request), /Pi is/);
+	});
+
+	it("does not send Claude assistant prefill for trailing dangling tool calls", () => {
+		const body = openAIToAntigravityBody({
+			model: "claude-sonnet-4-6",
+			messages: [
+				{ role: "user", content: "Please call a tool." },
+				{
+					role: "assistant",
+					content: null,
+					tool_calls: [
+						{
+							id: "call_trailing",
+							type: "function",
+							function: { name: "lookup", arguments: "{}" },
+						},
+					],
+				},
+			],
+		});
+
+		const contents = (body.request as { contents: Array<{ role: string }> }).contents;
+		assert.notEqual(contents.at(-1)?.role, "model");
+		assert.doesNotMatch(JSON.stringify(body.request), /call_trailing/);
+	});
+
 	it("strips cache_control fields from OpenAI content blocks", () => {
 		const body = openAIToAntigravityBody({
 			model: "gemini-3-flash",

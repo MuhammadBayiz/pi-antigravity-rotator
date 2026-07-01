@@ -1014,6 +1014,12 @@ export function openAIToAntigravityBody(
     }
   }
 
+  if (isClaude) {
+    while (contents.at(-1)?.role === "model") {
+      contents.pop();
+    }
+  }
+
   if (contents.length === 0)
     contents.push({ role: "user", parts: [{ text: "Hello" }] });
 
