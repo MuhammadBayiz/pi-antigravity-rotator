@@ -330,6 +330,78 @@ describe("compat adapters", () => {
 		assert.doesNotMatch(reqStr, /"call_def"/);
 	});
 
+	it("drops Claude tool results that no longer follow a matching tool call", () => {
+		const body = openAIToAntigravityBody({
+			model: "claude-sonnet-4-6",
+			messages: [
+				{
+					role: "user",
+					content: "Please call a tool.",
+				},
+				{
+					role: "assistant",
+					content: null,
+					tool_calls: [
+						{
+							id: "call_mr22ui45_0",
+							type: "function",
+							function: { name: "lookup", arguments: "{}" },
+						},
+					],
+				},
+				{
+					role: "user",
+					content: "Actually, one more instruction before the result.",
+				},
+				{
+					role: "tool",
+					tool_call_id: "call_mr22ui45_0",
+					name: "lookup",
+					content: "tool output",
+				},
+			],
+		});
+
+		const reqStr = JSON.stringify(body.request);
+		assert.doesNotMatch(reqStr, /"functionResponse"/);
+		assert.doesNotMatch(reqStr, /call_mr22ui45_0/);
+	});
+
+	it("keeps Anthropic tool_result blocks adjacent before mixed user text", () => {
+		const body = anthropicToAntigravityBody({
+			model: "claude-sonnet-4-6",
+			messages: [
+				{
+					role: "user",
+					content: [{ type: "text", text: "Please look up pi" }],
+				},
+				{
+					role: "assistant",
+					content: [
+						{ type: "tool_use", id: "call_mix", name: "lookup", input: { q: "pi" } },
+					],
+				},
+				{
+					role: "user",
+					content: [
+						{ type: "text", text: "Also use this note after the tool result." },
+						{ type: "tool_result", tool_use_id: "call_mix", content: "3.14159" },
+					],
+				},
+			],
+		});
+
+		const reqStr = JSON.stringify(body.request);
+		const callIdx = reqStr.indexOf('"functionCall":{"id":"call_mix"');
+		const responseIdx = reqStr.indexOf('"functionResponse":{"id":"call_mix"');
+		const noteIdx = reqStr.indexOf("Also use this note after the tool result.");
+		assert.notEqual(callIdx, -1);
+		assert.notEqual(responseIdx, -1);
+		assert.notEqual(noteIdx, -1);
+		assert.ok(callIdx < responseIdx);
+		assert.ok(responseIdx < noteIdx);
+	});
+
 	it("strips cache_control fields from OpenAI content blocks", () => {
 		const body = openAIToAntigravityBody({
 			model: "gemini-3-flash",
@@ -516,4 +588,3 @@ describe("setModelSpecsOverride", () => {
 		assert.equal(body.request.generationConfig.thinkingConfig?.thinkingBudget, 10001);
 	});
 });
-

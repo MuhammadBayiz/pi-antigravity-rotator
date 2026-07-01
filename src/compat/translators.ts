@@ -786,6 +786,8 @@ export function openAIToAntigravityBody(
   const isGeminiThinking = !isClaude && isThinking;
 
   const contents: GeminiContent[] = [];
+  // Claude requires every tool_result to immediately follow its tool_use turn.
+  let pendingClaudeToolCallIds = new Set<string>();
   for (let i = 0; i < conversationMessages.length; i++) {
     const msg = conversationMessages[i];
     if (msg.role === "assistant" || msg.role === "model") {
@@ -883,24 +885,39 @@ export function openAIToAntigravityBody(
         parts.push({ text: "..." });
       }
       if (parts.length > 0) {
+        const functionCallIds = new Set<string>();
+        for (const part of parts) {
+          if (!isRecord(part)) continue;
+          const functionCall = part.functionCall;
+          if (
+            isRecord(functionCall) &&
+            typeof functionCall.id === "string" &&
+            functionCall.id
+          ) {
+            functionCallIds.add(functionCall.id);
+          }
+        }
+        const hasFunctionCall = parts.some((p: any) => p.functionCall);
         if (isClaude) {
           const lastContent = contents[contents.length - 1];
           const prevHasFunctionCall =
             lastContent &&
             lastContent.role === "model" &&
             lastContent.parts.some((p: any) => p.functionCall);
-          const hasFunctionCall = parts.some((p: any) => p.functionCall);
           if (prevHasFunctionCall && !hasFunctionCall) {
             // Skip
           } else if (hasFunctionCall) {
             const fcOnly = parts.filter((p: any) => p.functionCall);
             if (prevHasFunctionCall) {
               lastContent.parts.push(...fcOnly);
+              for (const id of functionCallIds) pendingClaudeToolCallIds.add(id);
             } else {
               contents.push({ role: "model", parts: fcOnly });
+              pendingClaudeToolCallIds = new Set(functionCallIds);
             }
           } else {
             contents.push({ role: "model", parts });
+            pendingClaudeToolCallIds.clear();
           }
         } else {
           contents.push({ role: "model", parts });
@@ -913,6 +930,12 @@ export function openAIToAntigravityBody(
           : extractText(msg.content);
       const fnName = msg.name || "unknown";
       const toolCallId = msg.tool_call_id;
+      if (
+        isClaude &&
+        (!toolCallId || !pendingClaudeToolCallIds.has(toolCallId))
+      ) {
+        continue;
+      }
       let responseData: unknown;
       try {
         const parsed = JSON.parse(responseText);
@@ -981,9 +1004,13 @@ export function openAIToAntigravityBody(
       } else {
         contents.push({ role: "user", parts: [fnResponsePart, ...toolImages] });
       }
+      if (isClaude && toolCallId) pendingClaudeToolCallIds.delete(toolCallId);
     } else {
       const msgParts = extractParts(msg.content);
-      if (msgParts.length > 0) contents.push({ role: "user", parts: msgParts });
+      if (msgParts.length > 0) {
+        if (isClaude) pendingClaudeToolCallIds.clear();
+        contents.push({ role: "user", parts: msgParts });
+      }
     }
   }
 
@@ -1175,12 +1202,6 @@ export function convertAnthropicMessagesToOpenAI(
         const otherBlocks = blocks.filter(
           (b) => !isRecord(b) || b.type !== "tool_result",
         );
-        if (otherBlocks.length > 0) {
-          result.push({
-            role: "user",
-            content: otherBlocks as ChatMessage["content"],
-          });
-        }
         for (const tr of toolResults) {
           const content =
             typeof tr.content === "string"
@@ -1192,6 +1213,12 @@ export function convertAnthropicMessagesToOpenAI(
             role: "tool",
             content,
             tool_call_id: tr.tool_use_id as string,
+          });
+        }
+        if (otherBlocks.length > 0) {
+          result.push({
+            role: "user",
+            content: otherBlocks as ChatMessage["content"],
           });
         }
         continue;
