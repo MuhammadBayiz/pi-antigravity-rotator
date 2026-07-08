@@ -151,7 +151,7 @@ export async function discoverProject(accessToken: string): Promise<ProjectDisco
 	};
 
 	const endpoints = [
-		// "https://cloudcode-pa.googleapis.com",
+		"https://cloudcode-pa.googleapis.com",
 		"https://daily-cloudcode-pa.sandbox.googleapis.com",
 	];
 
@@ -189,7 +189,12 @@ export async function discoverProject(accessToken: string): Promise<ProjectDisco
 		}
 	}
 
-	throw new Error("Could not discover Cloud Code companion project ID from Google. If this account is new, open it in Antigravity IDE and send one message first, then retry login. Login failed instead of falling back to a shared projectId.");
+	oauthLogger.log("warn", "Could not discover Cloud Code companion project ID from Google. Falling back to 'cloud-code-companion'.");
+	return {
+		projectId: "cloud-code-companion",
+		source: "google",
+		endpoint: "https://cloudcode-pa.googleapis.com",
+	};
 }
 
 export async function getUserEmail(accessToken: string): Promise<string | undefined> {

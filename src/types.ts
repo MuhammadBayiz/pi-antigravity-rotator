@@ -33,6 +33,7 @@ export interface AccountConfig {
   type?: AccountType;
   tier?: AccountTier;
   familyManager?: boolean;
+  proxy?: string;
 }
 
 export interface Config {

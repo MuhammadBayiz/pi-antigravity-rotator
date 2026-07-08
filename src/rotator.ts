@@ -41,7 +41,23 @@ import {
 import { getOAuthClientConfig, isHostedOAuthConfigured } from "./oauth.js";
 import { fetchWithRetry } from "./fetch-with-retry.js";
 import { logger } from "./logger.js";
+import { ProxyAgent } from "undici";
+import { socksDispatcher } from "fetch-socks";
 import { getUpdateInfo } from "./version-check.js";
+
+function getProxyAgent(proxyUrl: string): any {
+  if (proxyUrl.startsWith("socks5://") || proxyUrl.startsWith("socks5h://")) {
+    const parsed = new URL(proxyUrl);
+    return socksDispatcher({
+      type: 5,
+      host: parsed.hostname,
+      port: parseInt(parsed.port, 10) || 1080,
+      userId: parsed.username ? decodeURIComponent(parsed.username) : undefined,
+      password: parsed.password ? decodeURIComponent(parsed.password) : undefined,
+    });
+  }
+  return new ProxyAgent({ uri: proxyUrl });
+}
 import { getNotifications } from "./notification-poller.js";
 import { getConfiguredAdminToken } from "./admin-auth.js";
 import { getProxyExposureWarning } from "./exposure.js";
@@ -619,6 +635,10 @@ export class AccountRotator {
     if (!account.accessToken) return;
 
     try {
+      let dispatcher: any;
+      if (account.config.proxy) {
+        dispatcher = getProxyAgent(account.config.proxy);
+      }
       const response = await fetchWithRetry(QUOTA_API_URL, {
         method: "POST",
         headers: {
@@ -628,7 +648,8 @@ export class AccountRotator {
         },
         body: JSON.stringify({ project: account.config.projectId }),
         timeoutMs: 8000,
-      });
+        dispatcher,
+      } as any);
 
       if (!response.ok) {
         if (response.status === 401 || response.status === 403) {
@@ -2382,6 +2403,10 @@ export class AccountRotator {
     );
     try {
       const oauth = getOAuthClientConfig();
+      let dispatcher: any;
+      if (account.config.proxy) {
+        dispatcher = getProxyAgent(account.config.proxy);
+      }
       const response = await fetchWithRetry(TOKEN_URL, {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -2391,7 +2416,8 @@ export class AccountRotator {
           refresh_token: account.config.refreshToken,
           grant_type: "refresh_token",
         }),
-      });
+        dispatcher,
+      } as any);
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -3209,6 +3235,10 @@ export class AccountRotator {
 
     let response: Response;
     try {
+      let dispatcher: any;
+      if (account.config.proxy) {
+        dispatcher = getProxyAgent(account.config.proxy);
+      }
       response = await fetch(url, {
         method: "POST",
         headers: {
@@ -3220,7 +3250,8 @@ export class AccountRotator {
         },
         body,
         signal: controller.signal,
-      });
+        dispatcher,
+      } as any);
     } catch (err) {
       clearTimeout(timeout);
       const msg = `kickstart network error: ${err instanceof Error ? err.message : String(err)}`;

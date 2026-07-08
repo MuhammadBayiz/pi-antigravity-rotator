@@ -134,6 +134,35 @@ The tool automatically:
 
 Re-running with the same email updates the existing entry.
 
+### Configuring Proxies Per-Account
+
+This fork adds native support for routing individual accounts through distinct outbound proxies. This prevents IP-based linking of your accounts and lets you bypass geo-restrictions for specific accounts.
+
+To configure a proxy for an account, open your `accounts.json` file:
+- Local NPM/Source path: `~/.pi-antigravity-rotator/accounts.json`
+- Docker path: `./docker-data/accounts.json` (if mapped in your compose file)
+
+Add a `"proxy"` field to any account in the `accounts` array:
+
+```json
+[
+  {
+    "email": "your-account@gmail.com",
+    "refreshToken": "...",
+    "projectId": "...",
+    "projectSource": "google",
+    "label": "my-account-1",
+    "proxy": "socks5h://user:password@proxy-ip:port"
+  }
+]
+```
+
+#### **Supported Proxy Protocols:**
+- **SOCKS5 / SOCKS5h:** `socks5://...` or `socks5h://...` (DNS resolved on proxy). SOCKS5 is highly recommended for faster connection speed, lower protocol overhead, and lack of double-encryption latency.
+- **HTTP / HTTPS:** `http://...` or `https://...` (standard web proxies).
+
+All API requests, token refreshes, and quota checks for that specific account will automatically be routed through its designated proxy.
+
 ### Connecting Agents to the Rotator
 
 This package is not exclusive to Pi. It can be consumed by **any** agent or frontend (e.g. Pi, Hermes, OpenWebUI) by connecting via an **OpenAI-compatible** provider profile.

@@ -7,6 +7,8 @@ import {
   type ServerResponse,
 } from "node:http";
 import { Readable } from "node:stream";
+import { ProxyAgent } from "undici";
+import { socksDispatcher } from "fetch-socks";
 import {
   ANTIGRAVITY_ENDPOINTS,
   REQUEST_CLIENT_METADATA,
@@ -787,6 +789,20 @@ async function streamResponseBody(
   return usage;
 }
 
+function getProxyAgent(proxyUrl: string): any {
+  if (proxyUrl.startsWith("socks5://") || proxyUrl.startsWith("socks5h://")) {
+    const parsed = new URL(proxyUrl);
+    return socksDispatcher({
+      type: 5,
+      host: parsed.hostname,
+      port: parseInt(parsed.port, 10) || 1080,
+      userId: parsed.username ? decodeURIComponent(parsed.username) : undefined,
+      password: parsed.password ? decodeURIComponent(parsed.password) : undefined,
+    });
+  }
+  return new ProxyAgent({ uri: proxyUrl });
+}
+
 /**
  * Forward a request to the real Antigravity endpoint with credential swapping.
  */
@@ -797,6 +813,11 @@ export async function forwardRequest(
 ): Promise<ForwardedResponse> {
   // Swap credentials
   body.project = account.config.projectId;
+
+  let dispatcher: any;
+  if (account.config.proxy) {
+    dispatcher = getProxyAgent(account.config.proxy);
+  }
 
   // Map internal display/compat names to Google upstream names (single source
   // of truth: src/types.ts:applyModelAlias)
@@ -880,7 +901,8 @@ export async function forwardRequest(
         headers: forwardHeaders,
         body: requestBody,
         signal: controller?.signal,
-      });
+        dispatcher,
+      } as any);
       if (timeout) clearTimeout(timeout);
 
       if (
