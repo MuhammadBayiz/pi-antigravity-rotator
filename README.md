@@ -138,7 +138,28 @@ Re-running with the same email updates the existing entry.
 
 This fork adds native support for routing individual accounts through distinct outbound proxies. This prevents IP-based linking of your accounts and lets you bypass geo-restrictions for specific accounts.
 
-To configure a proxy for an account, open your `accounts.json` file:
+#### Recommended: assign the proxy during login
+
+```bash
+pi-antigravity-rotator login --proxy "socks5h://user:password@proxy-ip:port"
+```
+
+This routes the login's own OAuth calls (token exchange, userinfo lookup, project
+discovery) through that exact proxy **and** saves it onto the new account entry in
+`accounts.json` automatically -- no manual JSON editing needed afterward. Use a
+different port/endpoint per account so each one gets a distinct outbound IP from
+the moment it's created.
+
+> **Note:** `--proxy` only covers the CLI's own background OAuth requests. The
+> interactive step where you open the Google sign-in URL and grant consent happens
+> in your device's actual browser, which does **not** inherit this setting. See
+> [Should the browser also use the proxy?](#should-the-browser-also-use-the-proxy)
+> below.
+
+#### Alternative: editing accounts.json directly
+
+You can also add or change a proxy for an already-added account by editing
+`accounts.json` by hand:
 - Local NPM/Source path: `~/.pi-antigravity-rotator/accounts.json`
 - Docker path: `./docker-data/accounts.json` (if mapped in your compose file)
 
@@ -157,11 +178,42 @@ Add a `"proxy"` field to any account in the `accounts` array:
 ]
 ```
 
+This retroactively covers ongoing traffic (generation, quota polling, token
+refresh, kickstart) for that account, but does **not** rewind the one-time login
+that already happened without a proxy.
+
 #### **Supported Proxy Protocols:**
 - **SOCKS5 / SOCKS5h:** `socks5://...` or `socks5h://...` (DNS resolved on proxy). SOCKS5 is highly recommended for faster connection speed, lower protocol overhead, and lack of double-encryption latency.
 - **HTTP / HTTPS:** `http://...` or `https://...` (standard web proxies).
+- **Not supported:** `socks4://`. Anything not prefixed `socks5://`/`socks5h://` is handed to an HTTP-style proxy client, so a `socks4://` URL will fail to connect rather than being rejected up front -- stick to SOCKS5/SOCKS5h or HTTP/HTTPS.
 
-All API requests, token refreshes, and quota checks for that specific account will automatically be routed through its designated proxy.
+All API requests, token refreshes, quota checks, and (as of the `--proxy` login flag) the one-time OAuth login for that specific account are automatically routed through its designated proxy.
+
+#### Should the browser also use the proxy?
+
+`--proxy` makes the CLI's own OAuth calls use the account's proxy, but the actual
+sign-in page renders in your device's regular browser over your device's regular
+network -- that leg is outside this tool's control.
+
+Whether that matters depends on what you're protecting against:
+
+- If you're just isolating **ongoing API traffic** per account (avoiding shared-IP
+  rate-limit correlation between accounts), the browser leg doesn't matter much --
+  it's a one-time, short interaction, and this tool never touches it again after
+  login.
+- If you're trying to avoid Google **linking multiple accounts together**, the
+  browser leg matters just as much as the API traffic, arguably more: the OAuth
+  consent screen is exactly where Google's risk engine records "this account was
+  authorized from IP X". If every account's login consent comes from the same
+  real device IP, that's a strong correlation signal regardless of how well the
+  ongoing traffic is separated afterward.
+
+If you care about the second case, route the browser through the *same* proxy
+endpoint you passed to `--proxy` for that account before opening the sign-in URL
+(e.g. a system-wide VPN/proxy app like v2rayNg pointed at that account's specific
+SOCKS5 port, or an in-browser proxy switcher), then revert it once login is done.
+This is no longer needed for the CLI's own traffic -- `--proxy` already handles
+that -- only for the interactive consent step itself.
 
 ### Connecting Agents to the Rotator
 
@@ -427,6 +479,7 @@ Login now fails if Google does not return a project ID. No shared fallback.
 | `projectId` | Cloud project ID discovered from Google during login |
 | `projectSource` | Optional metadata: `google` when discovered from Google, `manual` if edited by hand |
 | `label` | Display name on the dashboard (auto-filled, defaults to email username) |
+| `proxy` | Optional per-account outbound proxy URL (`socks5://`, `socks5h://`, `http://`, `https://`). Set via `login --proxy <url>` or by hand -- see [Configuring Proxies Per-Account](#configuring-proxies-per-account) |
 
 ## API Endpoints
 
