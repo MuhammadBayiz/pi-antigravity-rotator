@@ -931,6 +931,104 @@ export async function forwardRequest(
   throw new Error("All endpoints failed");
 }
 
+// Actions the Antigravity CLI sends straight to Google Code Assist that are
+// NOT model-generation calls (no {model, request} envelope). These are
+// bootstrap/discovery calls (project/tier lookup, model listing, experiment
+// flags, token counting) that the CLI issues before/around every session.
+// They must succeed for the CLI to work at all, so they get a lightweight
+// pass-through instead of the strict generation validator + quota rotation
+// used by handleProxyRequest/forwardRequest.
+const CODE_ASSIST_PASSTHROUGH_ACTIONS = new Set([
+  "loadCodeAssist",
+  "fetchAvailableModels",
+  "onboardUser",
+  "listExperiments",
+  "countTokens",
+]);
+
+/**
+ * Forward non-generation Code Assist calls (loadCodeAssist, fetchAvailableModels,
+ * etc.) to the real Google endpoint using a rotated account's token, without
+ * requiring the {model, request} body shape the generation path expects.
+ */
+async function handleCodeAssistPassthrough(
+  req: IncomingMessage,
+  res: ServerResponse,
+  rotator: AccountRotator,
+  pathname: string,
+): Promise<void> {
+  let bodyBuffer: Buffer;
+  try {
+    bodyBuffer = await readLimitedBody(req);
+  } catch (err) {
+    if (err instanceof PayloadTooLargeError) {
+      res.writeHead(413, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          error: "Payload too large",
+          limitBytes: err.limitBytes,
+        }),
+      );
+      return;
+    }
+    throw err;
+  }
+
+  const account = await rotator.getActiveAccount();
+  if (!account) {
+    log("Code Assist passthrough: no healthy account available", rotator, "warn");
+    res.writeHead(503, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "All accounts exhausted or disabled" }));
+    return;
+  }
+
+  try {
+    await rotator.ensureValidToken(account);
+  } catch (err) {
+    log(`Code Assist passthrough: token refresh failed: ${err}`, rotator, "error");
+    res.writeHead(502, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Account token refresh failed" }));
+    return;
+  }
+
+  const upstreamHost = pathname.startsWith("/daily-cloudcode-pa")
+    ? "https://daily-cloudcode-pa.googleapis.com"
+    : "https://cloudcode-pa.googleapis.com";
+  const upstreamPath = pathname.replace(/^\/(daily-)?cloudcode-pa/, "");
+
+  let dispatcher: any;
+  if (account.config.proxy) {
+    dispatcher = getProxyAgent(account.config.proxy);
+  }
+
+  try {
+    const upstreamRes = await fetch(`${upstreamHost}${upstreamPath}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${account.accessToken}`,
+        "User-Agent": REQUEST_USER_AGENT,
+        "X-Goog-Api-Client": REQUEST_GOOG_API_CLIENT,
+        "Client-Metadata": REQUEST_CLIENT_METADATA,
+      },
+      body: bodyBuffer,
+      dispatcher,
+    } as any);
+
+    const text = await upstreamRes.text();
+    res.writeHead(upstreamRes.status, {
+      "Content-Type": upstreamRes.headers.get("content-type") || "application/json",
+    });
+    res.end(text);
+  } catch (err) {
+    log(`Code Assist passthrough error: ${err}`, rotator, "error");
+    if (!res.headersSent) {
+      res.writeHead(502, { "Content-Type": "application/json" });
+    }
+    res.end(JSON.stringify({ error: "Upstream passthrough failed" }));
+  }
+}
+
 export async function withRotation<T>(
   rotator: AccountRotator,
   model: string,
@@ -1904,6 +2002,17 @@ export function startProxy(
 
     // Proxy route
     if (method === "POST" && url.includes("v1internal")) {
+      const action = pathname.split(":").pop() || "";
+      if (CODE_ASSIST_PASSTHROUGH_ACTIONS.has(action)) {
+        handleCodeAssistPassthrough(req, res, rotator, pathname).catch((err) => {
+          log(`Unhandled Code Assist passthrough error: ${err}`, rotator, "error");
+          if (!res.headersSent) {
+            res.writeHead(500, { "Content-Type": "application/json" });
+          }
+          res.end(JSON.stringify({ error: "Internal proxy error" }));
+        });
+        return;
+      }
       handleProxyRequest(req, res, rotator, scheduleSseBroadcast).catch(
         (err) => {
           log(`Unhandled error: ${err}`, rotator, "error");
