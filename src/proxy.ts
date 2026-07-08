@@ -7,8 +7,7 @@ import {
   type ServerResponse,
 } from "node:http";
 import { Readable } from "node:stream";
-import { ProxyAgent } from "undici";
-import { socksDispatcher } from "fetch-socks";
+import { getProxyAgent } from "./proxy-agent.js";
 import {
   ANTIGRAVITY_ENDPOINTS,
   REQUEST_CLIENT_METADATA,
@@ -787,20 +786,6 @@ async function streamResponseBody(
   });
 
   return usage;
-}
-
-function getProxyAgent(proxyUrl: string): any {
-  if (proxyUrl.startsWith("socks5://") || proxyUrl.startsWith("socks5h://")) {
-    const parsed = new URL(proxyUrl);
-    return socksDispatcher({
-      type: 5,
-      host: parsed.hostname,
-      port: parseInt(parsed.port, 10) || 1080,
-      userId: parsed.username ? decodeURIComponent(parsed.username) : undefined,
-      password: parsed.password ? decodeURIComponent(parsed.password) : undefined,
-    });
-  }
-  return new ProxyAgent({ uri: proxyUrl });
 }
 
 /**

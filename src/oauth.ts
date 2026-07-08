@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { CLIENT_ID, CLIENT_SECRET, TOKEN_URL } from "./types.js";
 import { fetchWithRetry } from "./fetch-with-retry.js";
+import { getProxyAgent } from "./proxy-agent.js";
 import { logger } from "./logger.js";
 
 const oauthLogger = logger.child("oauth");
@@ -100,7 +101,7 @@ export function buildAuthUrl(state: string, challenge: string): string {
 	return `${AUTH_URL}?${authParams.toString()}`;
 }
 
-export async function exchangeAuthorizationCode(code: string, verifier: string): Promise<TokenExchangeResult> {
+export async function exchangeAuthorizationCode(code: string, verifier: string, proxyUrl?: string): Promise<TokenExchangeResult> {
 	const oauth = getOAuthClientConfig();
 	const tokenResponse = await fetchWithRetry(TOKEN_URL, {
 		method: "POST",
@@ -113,7 +114,8 @@ export async function exchangeAuthorizationCode(code: string, verifier: string):
 			redirect_uri: oauth.redirectUri,
 			code_verifier: verifier,
 		}),
-	});
+		dispatcher: proxyUrl ? getProxyAgent(proxyUrl) : undefined,
+	} as any);
 
 	if (!tokenResponse.ok) {
 		const error = await tokenResponse.text();
@@ -143,7 +145,7 @@ export interface ProjectDiscoveryResult {
 	endpoint: string;
 }
 
-export async function discoverProject(accessToken: string): Promise<ProjectDiscoveryResult> {
+export async function discoverProject(accessToken: string, proxyUrl?: string): Promise<ProjectDiscoveryResult> {
 	const headers: Record<string, string> = {
 		Authorization: `Bearer ${accessToken}`,
 		"Content-Type": "application/json",
@@ -154,6 +156,8 @@ export async function discoverProject(accessToken: string): Promise<ProjectDisco
 		"https://cloudcode-pa.googleapis.com",
 		"https://daily-cloudcode-pa.sandbox.googleapis.com",
 	];
+
+	const dispatcher = proxyUrl ? getProxyAgent(proxyUrl) : undefined;
 
 	for (const endpoint of endpoints) {
 		try {
@@ -167,7 +171,8 @@ export async function discoverProject(accessToken: string): Promise<ProjectDisco
 						pluginType: "GEMINI",
 					},
 				}),
-			});
+				dispatcher,
+			} as any);
 
 			if (response.ok) {
 				const data = (await response.json()) as {
@@ -197,11 +202,12 @@ export async function discoverProject(accessToken: string): Promise<ProjectDisco
 	};
 }
 
-export async function getUserEmail(accessToken: string): Promise<string | undefined> {
+export async function getUserEmail(accessToken: string, proxyUrl?: string): Promise<string | undefined> {
 	try {
 		const response = await fetchWithRetry("https://www.googleapis.com/oauth2/v1/userinfo?alt=json", {
 			headers: { Authorization: `Bearer ${accessToken}` },
-		});
+			dispatcher: proxyUrl ? getProxyAgent(proxyUrl) : undefined,
+		} as any);
 		if (response.ok) {
 			const data = (await response.json()) as { email?: string };
 			return data.email;

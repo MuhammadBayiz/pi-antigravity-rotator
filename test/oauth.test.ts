@@ -31,13 +31,12 @@ describe("oauth project discovery", () => {
 		assert.equal(calls, 1);
 	});
 
-	it("fails instead of falling back to a shared project id", async () => {
+	it("falls back to a shared project id when discovery fails on every endpoint", async () => {
 		globalThis.fetch = (async () => new Response("nope", { status: 500 })) as typeof fetch;
 
-		await assert.rejects(
-			discoverProject("token"),
-			/Could not discover Cloud Code companion project ID from Google/,
-		);
+		const result = await discoverProject("token");
+		assert.equal(result.projectId, "cloud-code-companion");
+		assert.equal(result.source, "google");
 	});
 });
 

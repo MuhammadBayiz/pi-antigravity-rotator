@@ -36,9 +36,13 @@ function askQuestion(prompt: string): Promise<string> {
 	});
 }
 
-export async function runLogin(): Promise<void> {
+export async function runLogin(proxyUrl?: string): Promise<void> {
 	console.log("=== Pi Antigravity Rotator - Add Account ===");
 	console.log();
+	if (proxyUrl) {
+		console.log(`Routing login through proxy: ${proxyUrl}`);
+		console.log();
+	}
 
 	const oauth = getOAuthClientConfig();
 	const { verifier, challenge } = generatePkce();
@@ -74,13 +78,13 @@ export async function runLogin(): Promise<void> {
 
 	console.log();
 	console.log("Exchanging code for tokens...");
-	const tokenData = await exchangeAuthorizationCode(parsed.code, verifier);
+	const tokenData = await exchangeAuthorizationCode(parsed.code, verifier, proxyUrl);
 
 	console.log("Getting user info...");
-	const email = await getUserEmail(tokenData.accessToken);
+	const email = await getUserEmail(tokenData.accessToken, proxyUrl);
 
 	console.log("Discovering project...");
-	const project = await discoverProject(tokenData.accessToken);
+	const project = await discoverProject(tokenData.accessToken, proxyUrl);
 
 	const label = email ? email.split("@")[0] : "Account";
 	const entry: AccountConfig = {
@@ -89,6 +93,7 @@ export async function runLogin(): Promise<void> {
 		projectId: project.projectId,
 		projectSource: project.source,
 		label,
+		...(proxyUrl ? { proxy: proxyUrl } : {}),
 	};
 
 	console.log();
@@ -109,8 +114,13 @@ export async function runLogin(): Promise<void> {
 	console.log("Run 'npm start' to start the proxy.");
 }
 
+function readProxyArg(): string | undefined {
+	const idx = process.argv.indexOf("--proxy");
+	return idx !== -1 ? process.argv[idx + 1] : undefined;
+}
+
 if (process.argv[1]?.includes("login")) {
-	runLogin().catch((err) => {
+	runLogin(readProxyArg()).catch((err) => {
 		console.error("Login failed:", err);
 		process.exit(1);
 	});

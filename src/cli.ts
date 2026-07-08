@@ -31,7 +31,9 @@ switch (command) {
     const { initDb } = await import("./db-store.js");
     await initDb();
     const { runLogin } = await import("./login.js");
-    await runLogin();
+    const proxyIdx = args.indexOf("--proxy");
+    const proxyUrl = proxyIdx !== -1 ? args[proxyIdx + 1] : undefined;
+    await runLogin(proxyUrl);
     break;
   }
   case "status": {
@@ -86,6 +88,12 @@ switch (command) {
     console.log("Usage:");
     console.log("  pi-antigravity-rotator start     Start the proxy (default)");
     console.log("  pi-antigravity-rotator login     Add a new Google account");
+    console.log(
+      "    --proxy <url>                  Route this login through a SOCKS5/HTTP proxy",
+    );
+    console.log(
+      "                                   (socks5:// or socks5h://; saved on the account)",
+    );
     console.log(
       "  pi-antigravity-rotator status    Show account status (JSON)",
     );
