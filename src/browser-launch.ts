@@ -17,6 +17,27 @@ function commandExists(name: string): boolean {
 }
 
 /**
+ * Resolve a DISPLAY value for the child process. If the current shell
+ * already exports one, use it untouched. Otherwise, on Linux/Android
+ * (Termux), look for a live X11 socket directly -- an X server (e.g.
+ * termux-x11) can be running as its own app/process without ever exporting
+ * DISPLAY into unrelated shell sessions, so `process.env.DISPLAY` being
+ * unset does not mean no display exists.
+ */
+function resolveDisplay(): string | undefined {
+	if (process.env.DISPLAY) return process.env.DISPLAY;
+	if (process.platform === "darwin" || process.platform === "win32") return undefined;
+
+	const socketDirs = ["/tmp/.X11-unix", `${process.env.PREFIX ?? ""}/tmp/.X11-unix`].filter(Boolean);
+	for (const dir of socketDirs) {
+		for (let n = 0; n <= 3; n++) {
+			if (existsSync(join(dir, `X${n}`))) return `:${n}`;
+		}
+	}
+	return undefined;
+}
+
+/**
  * Resolve which browser binary to launch. Honors the widely-used `BROWSER`
  * env var override first (same convention as Create React App, xdg-open
  * wrappers, etc.), then falls back to common per-platform binary names.
@@ -107,6 +128,7 @@ export async function launchProxiedBrowser(
 
 	const { arg: proxyServerArg, credentialNote } = buildProxyServerArg(proxyUrl);
 	const profileDir = mkdtempSync(join(tmpdir(), "pi-rotator-login-"));
+	const display = resolveDisplay();
 
 	const child = spawn(
 		binary,
@@ -117,7 +139,11 @@ export async function launchProxiedBrowser(
 			"--no-default-browser-check",
 			url,
 		],
-		{ detached: true, stdio: ["ignore", "ignore", "pipe"] },
+		{
+			detached: true,
+			stdio: ["ignore", "ignore", "pipe"],
+			env: display ? { ...process.env, DISPLAY: display } : process.env,
+		},
 	);
 
 	let stderr = "";
