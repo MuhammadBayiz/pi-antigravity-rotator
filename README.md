@@ -235,8 +235,18 @@ Launches a browser in a **fresh, isolated temporary profile** (no leftover
 cookies from a previous account's session) with `--proxy-server` pointed at
 that same proxy, then navigates it straight to the Google sign-in URL. This
 removes the manual "reconfigure the VPN, then copy the URL" steps entirely --
-just complete the sign-in in the window that opens and paste the redirect URL
-back as usual.
+just complete the sign-in in the window that opens.
+
+The redirect back to `localhost` is also **detected automatically**: the CLI
+binds a throwaway local server on the configured redirect URI (default
+`http://localhost:51121/oauth-callback`) while it waits, so as soon as Google
+sends the browser back there the login continues on its own -- no copying the
+URL out of the address bar needed. This works whether or not you used
+`--open-browser` (it also catches the redirect if you opened the sign-in URL
+in your own regular browser). You can still paste the redirect URL manually
+at the prompt if auto-detection can't bind the port (e.g. something else is
+already using it) or you'd rather not wait. Once the code is captured, the
+browser window opened by `--open-browser` is closed automatically too.
 
 Requirements and caveats:
 - Needs a real browser binary. It checks the `BROWSER` env var first (the
@@ -245,10 +255,14 @@ Requirements and caveats:
   `PATH`. Set `BROWSER=/path/to/your/browser` if auto-detection doesn't find
   the one you want.
 - On a normal desktop OS this just works. **On Termux specifically**, the
-  browser needs an actual display to render into -- either a `termux-x11`
-  session with `DISPLAY` exported, or a browser built for a real GUI. Without
-  one, the launch fails fast and the command automatically falls back to
-  printing the URL for you to open manually, so nothing breaks.
+  browser needs an actual display to render into -- a `termux-x11` session.
+  If `DISPLAY` isn't already exported in the shell you ran the login command
+  from, the CLI looks for a live X11 socket itself (`$PREFIX/tmp/.X11-unix`,
+  which is where Termux's actually lives) and uses it automatically, since
+  termux-x11 runs as its own process and doesn't export `DISPLAY` into
+  unrelated shells. If no X server is found at all, the launch fails fast and
+  the command automatically falls back to printing the URL for you to open
+  manually, so nothing breaks.
 - Chromium has no way to accept SOCKS5 username/password authentication (no
   flag, no auth dialog for that protocol), so an authenticated
   `socks5://`/`socks5h://` proxy is rewritten to `http://` on the same

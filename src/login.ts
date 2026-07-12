@@ -8,6 +8,7 @@ import { createInterface } from "node:readline";
 import { addAccountToConfig, ensurePiAuthConfig, ensurePiModelsConfig, loadOrCreateAccountsConfig } from "./account-store.js";
 import { buildAuthUrl, discoverProject, exchangeAuthorizationCode, generatePkce, generateState, getOAuthClientConfig, getUserEmail } from "./oauth.js";
 import { launchProxiedBrowser } from "./browser-launch.js";
+import { startCallbackListener } from "./oauth-callback-listener.js";
 import type { AccountConfig } from "./types.js";
 import { getAccountsPath } from "./paths.js";
 
@@ -37,6 +38,20 @@ function askQuestion(prompt: string): Promise<string> {
 	});
 }
 
+/** Same as askQuestion, but exposes `cancel` so a competing async source (the
+ * auto-detected redirect) can shut the prompt down instead of leaving it
+ * dangling on stdin, which would keep the process alive indefinitely. */
+function askQuestionCancelable(prompt: string): { promise: Promise<string>; cancel: () => void } {
+	const rl = createInterface({ input: process.stdin, output: process.stdout });
+	const promise = new Promise<string>((resolve) => {
+		rl.question(prompt, (answer) => {
+			rl.close();
+			resolve(answer.trim());
+		});
+	});
+	return { promise, cancel: () => rl.close() };
+}
+
 export async function runLogin(proxyUrl?: string, openBrowser?: boolean): Promise<void> {
 	console.log("=== Pi Antigravity Rotator - Add Account ===");
 	console.log();
@@ -51,21 +66,22 @@ export async function runLogin(proxyUrl?: string, openBrowser?: boolean): Promis
 	const authUrl = buildAuthUrl(state, challenge);
 
 	let opened = false;
+	let browserLaunch: Awaited<ReturnType<typeof launchProxiedBrowser>> | undefined;
 	if (openBrowser) {
 		if (!proxyUrl) {
 			console.error("--open-browser requires --proxy <url> so the browser matches the account's proxy.");
 			process.exit(1);
 		}
-		const launch = await launchProxiedBrowser(authUrl, proxyUrl);
-		if (launch.ok) {
+		browserLaunch = await launchProxiedBrowser(authUrl, proxyUrl);
+		if (browserLaunch.ok) {
 			opened = true;
 			console.log("Opened a browser window through the proxy in a fresh, isolated profile.");
-			if (launch.credentialNote) {
-				console.log(launch.credentialNote);
+			if (browserLaunch.credentialNote) {
+				console.log(browserLaunch.credentialNote);
 			}
 			console.log();
-		} else if (launch.failureReason) {
-			console.log(`Browser launch failed: ${launch.failureReason}`);
+		} else if (browserLaunch.failureReason) {
+			console.log(`Browser launch failed: ${browserLaunch.failureReason}`);
 			console.log("Falling back to manual URL.");
 			console.log();
 		} else {
@@ -81,17 +97,49 @@ export async function runLogin(proxyUrl?: string, openBrowser?: boolean): Promis
 		console.log();
 	}
 	console.log("2. Complete the Google sign-in.");
-	console.log(`3. Copy the FULL URL from your browser after it redirects to ${oauth.redirectUri}.`);
+	console.log(`3. The redirect to ${oauth.redirectUri} is detected automatically -- or paste the full URL below if it doesn't.`);
 	console.log();
 
-	const redirectUrl = await askQuestion("Paste the redirect URL: ");
+	// Bind a throwaway local server on the redirect URI so Google's final
+	// redirect is captured directly, instead of requiring the user to copy it
+	// out of the browser's address bar. Races that against the manual paste
+	// prompt so either path works: whichever resolves first wins, and the
+	// loser is cancelled so it can't leak a dangling readline/socket.
+	const callbackListener = startCallbackListener(oauth.redirectUri);
+	let parsed: { code?: string; state?: string };
 
-	if (!redirectUrl) {
-		console.error("No URL provided.");
-		process.exit(1);
+	for (;;) {
+		const manual = askQuestionCancelable("Paste the redirect URL (leave blank to keep waiting): ");
+		const race = await Promise.race([
+			callbackListener.promise.then((v) => ({ source: "auto" as const, v })),
+			manual.promise.then((v) => ({ source: "manual" as const, v })),
+		]);
+
+		if (race.source === "auto") {
+			manual.cancel();
+			if (race.v?.code) {
+				callbackListener.close();
+				console.log("Detected the redirect automatically.");
+				console.log();
+				parsed = race.v;
+				break;
+			}
+			// Auto-detection gave up (port already in use, or timed out): fall
+			// back to a single manual prompt with no more racing.
+			const redirectUrl = await askQuestion("Paste the redirect URL: ");
+			if (!redirectUrl) {
+				console.error("No URL provided.");
+				process.exit(1);
+			}
+			parsed = parseRedirectUrl(redirectUrl);
+			break;
+		}
+
+		if (!race.v) continue; // blank Enter: keep waiting for auto-detection
+		callbackListener.close();
+		parsed = parseRedirectUrl(race.v);
+		break;
 	}
-
-	const parsed = parseRedirectUrl(redirectUrl);
 
 	if (!parsed.code) {
 		console.error("Could not extract authorization code from the URL.");
@@ -102,6 +150,11 @@ export async function runLogin(proxyUrl?: string, openBrowser?: boolean): Promis
 		console.error("State mismatch - the URL does not match this login session.");
 		process.exit(1);
 	}
+
+	// The browser has done its job the moment we have a valid code -- close
+	// it now rather than leaving the window (and its process) running, which
+	// was also what kept the CLI itself from exiting afterward.
+	browserLaunch?.close?.();
 
 	console.log();
 	console.log("Exchanging code for tokens...");
@@ -147,8 +200,10 @@ function readProxyArg(): string | undefined {
 }
 
 if (process.argv[1]?.includes("login")) {
-	runLogin(readProxyArg(), process.argv.includes("--open-browser")).catch((err) => {
-		console.error("Login failed:", err);
-		process.exit(1);
-	});
+	runLogin(readProxyArg(), process.argv.includes("--open-browser"))
+		.then(() => process.exit(0))
+		.catch((err) => {
+			console.error("Login failed:", err);
+			process.exit(1);
+		});
 }

@@ -110,6 +110,8 @@ export interface BrowserLaunchResult {
 	credentialNote?: string;
 	/** Set when ok is false and a binary was found but exited immediately (e.g. no display). */
 	failureReason?: string;
+	/** Present when ok is true: terminates the launched browser window. */
+	close?: () => void;
 }
 
 /**
@@ -170,6 +172,23 @@ export async function launchProxiedBrowser(
 		};
 	}
 
+	// The browser window is intentionally left running past this point (the
+	// user still needs to complete sign-in in it), but its stderr pipe was
+	// only needed to detect the immediate-crash case above. A long-lived pipe
+	// with an active listener keeps Node's event loop alive even after
+	// child.unref(), which would otherwise leave the CLI hanging until the
+	// browser is closed by hand -- so stop reading it now.
+	child.stderr?.destroy();
 	child.unref();
-	return { ok: true, credentialNote };
+	return {
+		ok: true,
+		credentialNote,
+		close: () => {
+			try {
+				child.kill();
+			} catch {
+				// already exited
+			}
+		},
+	};
 }

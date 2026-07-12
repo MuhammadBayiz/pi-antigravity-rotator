@@ -35,6 +35,7 @@ switch (command) {
     const proxyUrl = proxyIdx !== -1 ? args[proxyIdx + 1] : undefined;
     const openBrowser = args.includes("--open-browser");
     await runLogin(proxyUrl, openBrowser);
+    process.exit(0);
     break;
   }
   case "status": {
