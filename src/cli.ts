@@ -33,7 +33,8 @@ switch (command) {
     const { runLogin } = await import("./login.js");
     const proxyIdx = args.indexOf("--proxy");
     const proxyUrl = proxyIdx !== -1 ? args[proxyIdx + 1] : undefined;
-    await runLogin(proxyUrl);
+    const openBrowser = args.includes("--open-browser");
+    await runLogin(proxyUrl, openBrowser);
     break;
   }
   case "status": {
@@ -90,6 +91,9 @@ switch (command) {
     console.log("  pi-antigravity-rotator login     Add a new Google account");
     console.log(
       "    --proxy <url>                  Route this login through a SOCKS5/HTTP proxy",
+    );
+    console.log(
+      "    --open-browser                 Launch a browser through that same proxy (requires --proxy)",
     );
     console.log(
       "                                   (socks5:// or socks5h://; saved on the account)",

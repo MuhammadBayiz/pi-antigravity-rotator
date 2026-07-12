@@ -7,6 +7,7 @@
 import { createInterface } from "node:readline";
 import { addAccountToConfig, ensurePiAuthConfig, ensurePiModelsConfig, loadOrCreateAccountsConfig } from "./account-store.js";
 import { buildAuthUrl, discoverProject, exchangeAuthorizationCode, generatePkce, generateState, getOAuthClientConfig, getUserEmail } from "./oauth.js";
+import { launchProxiedBrowser } from "./browser-launch.js";
 import type { AccountConfig } from "./types.js";
 import { getAccountsPath } from "./paths.js";
 
@@ -36,7 +37,7 @@ function askQuestion(prompt: string): Promise<string> {
 	});
 }
 
-export async function runLogin(proxyUrl?: string): Promise<void> {
+export async function runLogin(proxyUrl?: string, openBrowser?: boolean): Promise<void> {
 	console.log("=== Pi Antigravity Rotator - Add Account ===");
 	console.log();
 	if (proxyUrl) {
@@ -49,10 +50,36 @@ export async function runLogin(proxyUrl?: string): Promise<void> {
 	const state = generateState();
 	const authUrl = buildAuthUrl(state, challenge);
 
-	console.log("1. Open this URL in your browser:");
-	console.log();
-	console.log(authUrl);
-	console.log();
+	let opened = false;
+	if (openBrowser) {
+		if (!proxyUrl) {
+			console.error("--open-browser requires --proxy <url> so the browser matches the account's proxy.");
+			process.exit(1);
+		}
+		const launch = await launchProxiedBrowser(authUrl, proxyUrl);
+		if (launch.ok) {
+			opened = true;
+			console.log("Opened a browser window through the proxy in a fresh, isolated profile.");
+			if (launch.credentialNote) {
+				console.log(launch.credentialNote);
+			}
+			console.log();
+		} else if (launch.failureReason) {
+			console.log(`Browser launch failed: ${launch.failureReason}`);
+			console.log("Falling back to manual URL.");
+			console.log();
+		} else {
+			console.log("Could not find a browser binary to launch (set the BROWSER env var to its path). Falling back to manual URL.");
+			console.log();
+		}
+	}
+
+	if (!opened) {
+		console.log("1. Open this URL in your browser:");
+		console.log();
+		console.log(authUrl);
+		console.log();
+	}
 	console.log("2. Complete the Google sign-in.");
 	console.log(`3. Copy the FULL URL from your browser after it redirects to ${oauth.redirectUri}.`);
 	console.log();
@@ -120,7 +147,7 @@ function readProxyArg(): string | undefined {
 }
 
 if (process.argv[1]?.includes("login")) {
-	runLogin(readProxyArg()).catch((err) => {
+	runLogin(readProxyArg(), process.argv.includes("--open-browser")).catch((err) => {
 		console.error("Login failed:", err);
 		process.exit(1);
 	});

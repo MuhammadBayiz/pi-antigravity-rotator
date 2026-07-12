@@ -215,6 +215,50 @@ SOCKS5 port, or an in-browser proxy switcher), then revert it once login is done
 This is no longer needed for the CLI's own traffic -- `--proxy` already handles
 that -- only for the interactive consent step itself.
 
+Note that a system-wide VPN/proxy app is a single tunnel: if you leave it pointed
+at one port while logging in to several accounts back-to-back, all of those
+consents exit through the same IP regardless of which port each account's
+`accounts.json` entry references. Re-point the VPN to match the specific port
+*before each individual login*, or use `--open-browser` below, which does this
+automatically per-invocation with no VPN app involved. Also use a fresh/incognito
+browser profile per account -- Google's correlation signal isn't limited to IP;
+a reused browser session (cookies, device fingerprint) can link accounts even
+when each one's network path is genuinely distinct.
+
+#### `--open-browser`: launch a matching browser automatically
+
+```bash
+pi-antigravity-rotator login --proxy "socks5h://user:password@proxy-ip:port" --open-browser
+```
+
+Launches a browser in a **fresh, isolated temporary profile** (no leftover
+cookies from a previous account's session) with `--proxy-server` pointed at
+that same proxy, then navigates it straight to the Google sign-in URL. This
+removes the manual "reconfigure the VPN, then copy the URL" steps entirely --
+just complete the sign-in in the window that opens and paste the redirect URL
+back as usual.
+
+Requirements and caveats:
+- Needs a real browser binary. It checks the `BROWSER` env var first (the
+  same convention used by tools like Create React App), then falls back to
+  common names (`google-chrome`, `chromium`, `chromium-browser`, etc.) on
+  `PATH`. Set `BROWSER=/path/to/your/browser` if auto-detection doesn't find
+  the one you want.
+- On a normal desktop OS this just works. **On Termux specifically**, the
+  browser needs an actual display to render into -- either a `termux-x11`
+  session with `DISPLAY` exported, or a browser built for a real GUI. Without
+  one, the launch fails fast and the command automatically falls back to
+  printing the URL for you to open manually, so nothing breaks.
+- Chromium has no way to accept SOCKS5 username/password authentication (no
+  flag, no auth dialog for that protocol), so an authenticated
+  `socks5://`/`socks5h://` proxy is rewritten to `http://` on the same
+  host/port for the browser launch only -- this relies on the proxy provider
+  also accepting HTTP CONNECT on that port, which is common but
+  provider-dependent. If your proxy only speaks SOCKS5, `--open-browser` will
+  print the credentials for you to enter into Chromium's proxy-auth prompt,
+  or (if that provider genuinely has no HTTP mode) it just won't authenticate
+  -- fall back to the VPN-app or manual-URL approach for that account.
+
 ### Connecting Agents to the Rotator
 
 This package is not exclusive to Pi. It can be consumed by **any** agent or frontend (e.g. Pi, Hermes, OpenWebUI) by connecting via an **OpenAI-compatible** provider profile.
