@@ -929,6 +929,8 @@ const CODE_ASSIST_PASSTHROUGH_ACTIONS = new Set([
   "onboardUser",
   "listExperiments",
   "countTokens",
+  "retrieveUserQuota",
+  "retrieveUserQuotaSummary",
 ]);
 
 /**
