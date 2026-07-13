@@ -1227,6 +1227,11 @@ async function handleProxyRequest(
     const parsed: unknown = JSON.parse(bodyBuffer.toString("utf-8"));
     const validation = validateProxyRequestBody(parsed);
     if (!validation.ok || !validation.value) {
+      log(
+        `Rejected ${req.url}: ${validation.errors.join(", ")} -- body: ${bodyBuffer.toString("utf-8").slice(0, 500)}`,
+        rotator,
+        "warn",
+      );
       res.writeHead(400, { "Content-Type": "application/json" });
       res.end(
         JSON.stringify({
