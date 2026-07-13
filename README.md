@@ -248,13 +248,6 @@ at the prompt if auto-detection can't bind the port (e.g. something else is
 already using it) or you'd rather not wait. Once the code is captured, the
 browser window opened by `--open-browser` is closed automatically too.
 
-Pass `--no-auto-detect` to skip binding that local server entirely and go
-straight to the manual paste prompt. Use this if something else needs the
-redirect port free at the same time -- for example, the real Antigravity
-CLI's own native sign-in uses the same default `localhost:51121` redirect, so
-running it while a rotator login is holding that port will make the native
-sign-in fail.
-
 Requirements and caveats:
 - Needs a real browser binary. It checks the `BROWSER` env var first (the
   same convention used by tools like Create React App), then falls back to

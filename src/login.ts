@@ -52,7 +52,7 @@ function askQuestionCancelable(prompt: string): { promise: Promise<string>; canc
 	return { promise, cancel: () => rl.close() };
 }
 
-export async function runLogin(proxyUrl?: string, openBrowser?: boolean, autoDetect = true): Promise<void> {
+export async function runLogin(proxyUrl?: string, openBrowser?: boolean): Promise<void> {
 	console.log("=== Pi Antigravity Rotator - Add Account ===");
 	console.log();
 	if (proxyUrl) {
@@ -97,66 +97,48 @@ export async function runLogin(proxyUrl?: string, openBrowser?: boolean, autoDet
 		console.log();
 	}
 	console.log("2. Complete the Google sign-in.");
-	if (autoDetect) {
-		console.log(`3. The redirect to ${oauth.redirectUri} is detected automatically -- or paste the full URL below if it doesn't.`);
-	} else {
-		console.log(`3. Copy the full redirect URL (starts with ${oauth.redirectUri}) and paste it below.`);
-	}
+	console.log(`3. The redirect to ${oauth.redirectUri} is detected automatically -- or paste the full URL below if it doesn't.`);
 	console.log();
 
+	// Bind a throwaway local server on the redirect URI so Google's final
+	// redirect is captured directly, instead of requiring the user to copy it
+	// out of the browser's address bar. Races that against the manual paste
+	// prompt so either path works: whichever resolves first wins, and the
+	// loser is cancelled so it can't leak a dangling readline/socket.
+	const callbackListener = startCallbackListener(oauth.redirectUri);
 	let parsed: { code?: string; state?: string };
 
-	if (!autoDetect) {
-		// Auto-detection explicitly disabled (--no-auto-detect): don't bind the
-		// redirect port at all, e.g. because something else -- like the real
-		// Antigravity CLI's own native sign-in -- needs that same port free
-		// during this login.
-		const redirectUrl = await askQuestion("Paste the redirect URL: ");
-		if (!redirectUrl) {
-			console.error("No URL provided.");
-			process.exit(1);
-		}
-		parsed = parseRedirectUrl(redirectUrl);
-	} else {
-		// Bind a throwaway local server on the redirect URI so Google's final
-		// redirect is captured directly, instead of requiring the user to copy it
-		// out of the browser's address bar. Races that against the manual paste
-		// prompt so either path works: whichever resolves first wins, and the
-		// loser is cancelled so it can't leak a dangling readline/socket.
-		const callbackListener = startCallbackListener(oauth.redirectUri);
+	for (;;) {
+		const manual = askQuestionCancelable("Paste the redirect URL (leave blank to keep waiting): ");
+		const race = await Promise.race([
+			callbackListener.promise.then((v) => ({ source: "auto" as const, v })),
+			manual.promise.then((v) => ({ source: "manual" as const, v })),
+		]);
 
-		for (;;) {
-			const manual = askQuestionCancelable("Paste the redirect URL (leave blank to keep waiting): ");
-			const race = await Promise.race([
-				callbackListener.promise.then((v) => ({ source: "auto" as const, v })),
-				manual.promise.then((v) => ({ source: "manual" as const, v })),
-			]);
-
-			if (race.source === "auto") {
-				manual.cancel();
-				if (race.v?.code) {
-					callbackListener.close();
-					console.log("Detected the redirect automatically.");
-					console.log();
-					parsed = race.v;
-					break;
-				}
-				// Auto-detection gave up (port already in use, or timed out): fall
-				// back to a single manual prompt with no more racing.
-				const redirectUrl = await askQuestion("Paste the redirect URL: ");
-				if (!redirectUrl) {
-					console.error("No URL provided.");
-					process.exit(1);
-				}
-				parsed = parseRedirectUrl(redirectUrl);
+		if (race.source === "auto") {
+			manual.cancel();
+			if (race.v?.code) {
+				callbackListener.close();
+				console.log("Detected the redirect automatically.");
+				console.log();
+				parsed = race.v;
 				break;
 			}
-
-			if (!race.v) continue; // blank Enter: keep waiting for auto-detection
-			callbackListener.close();
-			parsed = parseRedirectUrl(race.v);
+			// Auto-detection gave up (port already in use, or timed out): fall
+			// back to a single manual prompt with no more racing.
+			const redirectUrl = await askQuestion("Paste the redirect URL: ");
+			if (!redirectUrl) {
+				console.error("No URL provided.");
+				process.exit(1);
+			}
+			parsed = parseRedirectUrl(redirectUrl);
 			break;
 		}
+
+		if (!race.v) continue; // blank Enter: keep waiting for auto-detection
+		callbackListener.close();
+		parsed = parseRedirectUrl(race.v);
+		break;
 	}
 
 	if (!parsed.code) {
@@ -218,7 +200,7 @@ function readProxyArg(): string | undefined {
 }
 
 if (process.argv[1]?.includes("login")) {
-	runLogin(readProxyArg(), process.argv.includes("--open-browser"), !process.argv.includes("--no-auto-detect"))
+	runLogin(readProxyArg(), process.argv.includes("--open-browser"))
 		.then(() => process.exit(0))
 		.catch((err) => {
 			console.error("Login failed:", err);
