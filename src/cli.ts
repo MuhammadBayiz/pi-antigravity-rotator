@@ -34,7 +34,8 @@ switch (command) {
     const proxyIdx = args.indexOf("--proxy");
     const proxyUrl = proxyIdx !== -1 ? args[proxyIdx + 1] : undefined;
     const openBrowser = args.includes("--open-browser");
-    await runLogin(proxyUrl, openBrowser);
+    const autoDetect = !args.includes("--no-auto-detect");
+    await runLogin(proxyUrl, openBrowser, autoDetect);
     process.exit(0);
     break;
   }
@@ -98,6 +99,12 @@ switch (command) {
     );
     console.log(
       "                                   (socks5:// or socks5h://; saved on the account)",
+    );
+    console.log(
+      "    --no-auto-detect               Don't bind the OAuth redirect port -- paste the URL manually instead",
+    );
+    console.log(
+      "                                   (use this if another sign-in, e.g. agy's own, needs that port free)",
     );
     console.log(
       "  pi-antigravity-rotator status    Show account status (JSON)",
