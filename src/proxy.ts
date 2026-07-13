@@ -931,6 +931,9 @@ const CODE_ASSIST_PASSTHROUGH_ACTIONS = new Set([
   "countTokens",
   "retrieveUserQuota",
   "retrieveUserQuotaSummary",
+  "setUserSettings",
+  "fetchUserInfo",
+  "fetchAdminControls",
 ]);
 
 /**
