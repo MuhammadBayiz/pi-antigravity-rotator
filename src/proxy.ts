@@ -7,7 +7,10 @@ import {
   type ServerResponse,
 } from "node:http";
 import { Readable } from "node:stream";
+import { join } from "node:path";
 import { requireProxyDispatcher } from "./proxy-agent.js";
+import { attachMitm } from "./mitm.js";
+import { getConfigDir } from "./paths.js";
 import {
   ANTIGRAVITY_ENDPOINTS,
   REQUEST_CLIENT_METADATA,
@@ -2027,8 +2030,29 @@ export function startProxy(
     res.end(JSON.stringify({ error: "Not found" }));
   });
 
-  server.listen(port, bindHost, () => {
-    log(`Listening on ${bindHost}:${port}`, rotator);
+  // MITM forward-proxy mode: lets clients that only speak HTTPS_PROXY (agy) be
+  // routed through the rotator with full account rotation. Off via
+  // PI_ROTATOR_MITM=off. When on, force a loopback bind -- a network-exposed
+  // terminating proxy with a trusted CA would be dangerous.
+  const mitmDisabled = /^(off|false|0)$/i.test(process.env.PI_ROTATOR_MITM ?? "");
+  let effectiveBindHost = bindHost;
+  if (!mitmDisabled) {
+    if (bindHost !== "127.0.0.1" && bindHost !== "localhost" && bindHost !== "::1") {
+      log(`MITM enabled: forcing loopback bind (was ${bindHost})`, rotator, "warn");
+      effectiveBindHost = "127.0.0.1";
+    }
+    try {
+      attachMitm(server, {
+        certDir: join(getConfigDir(), "mitm-certs"),
+        getBlindTunnelProxy: () => rotator.getAnyProxy(),
+      });
+    } catch (err) {
+      log(`MITM attach failed (continuing without it): ${err}`, rotator, "error");
+    }
+  }
+
+  server.listen(port, effectiveBindHost, () => {
+    log(`Listening on ${effectiveBindHost}:${port}`, rotator);
     log(`Dashboard: http://localhost:${port}/dashboard`, rotator);
     log(`Hosted login: http://localhost:${port}/login`, rotator);
   });

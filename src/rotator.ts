@@ -2563,6 +2563,18 @@ export class AccountRotator {
     return Math.max(1000, Math.min(...retryTimes) - now);
   }
 
+  /**
+   * A proxy to blind-tunnel non-terminated MITM traffic through (agy's own
+   * token refresh / telemetry), so nothing exits on the device's real IP.
+   * Prefers an enabled account; falls back to any configured proxy.
+   */
+  getAnyProxy(): string | undefined {
+    const enabled = this.accounts.find(
+      (a) => !a.disabled && !a.flagged && a.config.proxy,
+    );
+    return (enabled ?? this.accounts.find((a) => a.config.proxy))?.config.proxy;
+  }
+
   getStatus(): StatusResponse {
     const now = Date.now();
     this.refreshHealthScores();
