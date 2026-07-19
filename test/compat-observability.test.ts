@@ -9,7 +9,8 @@ import {
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { PassThrough } from "node:stream";
-import { afterEach, describe, it } from "node:test";
+import { after, afterEach, before, describe, it } from "node:test";
+import { startDirectProxy, type TestProxy } from "./helpers/local-proxy.js";
 import {
   handleAnthropicMessages,
   handleGeminiGenerateContent,
@@ -49,6 +50,16 @@ type ResponseStub = ServerResponse & {
 const endpointOverrides = ANTIGRAVITY_ENDPOINTS as unknown as string[];
 const originalEndpoints = [...endpointOverrides];
 
+let testProxy: TestProxy;
+let testProxyUrl = "http://proxy.test:8080";
+before(async () => {
+  testProxy = await startDirectProxy();
+  testProxyUrl = testProxy.url;
+});
+after(async () => {
+  await testProxy?.close();
+});
+
 afterEach(() => {
   endpointOverrides.splice(0, endpointOverrides.length, ...originalEndpoints);
   resetResponsesStoreForTests();
@@ -72,6 +83,7 @@ function createAccount(): AccountRuntime {
       email: "test@example.com",
       projectId: "test-project",
       refreshToken: "refresh-token",
+      proxy: testProxyUrl,
       label: "test-account",
     },
     accessToken: "access-token",

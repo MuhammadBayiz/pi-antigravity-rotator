@@ -5,16 +5,29 @@
 
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { afterEach, describe, it } from "node:test";
+import { after, afterEach, before, describe, it } from "node:test";
 import {
 	withRotation,
 	type RequestBody,
 } from "../src/proxy.js";
 import { ANTIGRAVITY_ENDPOINTS, type AccountRuntime } from "../src/types.js";
 import type { AccountRotator } from "../src/rotator.js";
+import { startDirectProxy, type TestProxy } from "./helpers/local-proxy.js";
 
 const endpointOverrides = ANTIGRAVITY_ENDPOINTS as unknown as string[];
 const originalEndpoints = [...endpointOverrides];
+
+// Every account must route through a proxy (fail-closed). Use a local
+// direct-forwarding proxy so the real dispatcher path is exercised.
+let testProxy: TestProxy;
+let testProxyUrl = "http://proxy.test:8080";
+before(async () => {
+	testProxy = await startDirectProxy();
+	testProxyUrl = testProxy.url;
+});
+after(async () => {
+	await testProxy?.close();
+});
 
 afterEach(() => {
 	endpointOverrides.splice(0, endpointOverrides.length, ...originalEndpoints);
@@ -39,7 +52,7 @@ async function listen(handler: Handler): Promise<{ url: string; close: () => Pro
 
 function makeAccount(email: string, projectId = "test-project"): AccountRuntime {
 	return {
-		config: { email, projectId, refreshToken: "rt", label: email },
+		config: { email, projectId, refreshToken: "rt", label: email, proxy: testProxyUrl },
 		accessToken: `token-${email}`,
 		tokenExpires: Date.now() + 60_000,
 		requestsSinceRotation: 0,

@@ -8,6 +8,7 @@ import {
   getCachedState,
   getCachedTokenUsage,
 } from "./db-store.js";
+import { hasProxyConfigured } from "./proxy-agent.js";
 
 function checkWritable(path: string): boolean {
   try {
@@ -61,6 +62,20 @@ export async function runDoctor(
     warnings.push(
       "No accounts config found. Run 'pi-antigravity-rotator login' to add your first account.",
     );
+  } else if (Array.isArray(cfg.accounts) && cfg.accounts.length > 0) {
+    // Fail-closed audit: any account without a proxy is disabled and unusable,
+    // because serving it would leak the device's real IP to Google.
+    const noProxy = cfg.accounts.filter(
+      (a) => !hasProxyConfigured((a as { proxy?: string }).proxy),
+    );
+    if (noProxy.length > 0) {
+      warnings.push(
+        `${noProxy.length} account(s) have NO proxy and will be REFUSED at request time ` +
+          `(fail-closed, never served over the real IP): ` +
+          noProxy.map((a) => a.email || "unknown").join(", ") +
+          ". Re-add each with --proxy <url> so its traffic exits through its own IP.",
+      );
+    }
   }
 
   // Validate state

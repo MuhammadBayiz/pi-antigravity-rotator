@@ -23,8 +23,13 @@ describe("telemetry", () => {
 	});
 
 	describe("isTelemetryEnabled()", () => {
-		it("returns true by default (opt-out model)", () => {
+		it("returns false by default (opt-in model)", () => {
 			delete process.env.PI_ROTATOR_TELEMETRY;
+			assert.equal(isTelemetryEnabled(), false);
+		});
+
+		it("returns true only when explicitly enabled", () => {
+			process.env.PI_ROTATOR_TELEMETRY = "on";
 			assert.equal(isTelemetryEnabled(), true);
 		});
 

@@ -9,10 +9,30 @@ import { addAccountToConfig, ensurePiAuthConfig, ensurePiModelsConfig, loadOrCre
 import { buildAuthUrl, discoverProject, exchangeAuthorizationCode, generatePkce, generateState, getOAuthClientConfig, getUserEmail } from "./oauth.js";
 import { launchProxiedBrowser } from "./browser-launch.js";
 import { startCallbackListener } from "./oauth-callback-listener.js";
+import { getProxyAgent } from "./proxy-agent.js";
 import type { AccountConfig } from "./types.js";
 import { getAccountsPath } from "./paths.js";
 
 const ACCOUNTS_FILE = getAccountsPath();
+
+/**
+ * Confirm the proxy actually carries traffic and return the public egress IP
+ * (what Google will see), using the SAME undici dispatcher the runtime uses.
+ * Returns null on any failure so the caller can fail-closed.
+ */
+async function verifyProxyEgress(proxyUrl: string): Promise<string | null> {
+	try {
+		const res = await fetch("https://api.ipify.org?format=text", {
+			dispatcher: getProxyAgent(proxyUrl),
+			signal: AbortSignal.timeout(15_000),
+		} as unknown as RequestInit);
+		if (!res.ok) return null;
+		const ip = (await res.text()).trim();
+		return /^[0-9a-fA-F:.]+$/.test(ip) && ip.length >= 4 ? ip : null;
+	} catch {
+		return null;
+	}
+}
 
 function parseRedirectUrl(input: string): { code?: string; state?: string } {
 	const value = input.trim();
@@ -55,10 +75,35 @@ function askQuestionCancelable(prompt: string): { promise: Promise<string>; canc
 export async function runLogin(proxyUrl?: string, withBrowser?: boolean, autoGrab?: boolean): Promise<void> {
 	console.log("=== Pi Antigravity Rotator - Add Account ===");
 	console.log();
-	if (proxyUrl) {
-		console.log(`Routing login through proxy: ${proxyUrl}`);
-		console.log();
+
+	// Fail-closed: every account MUST have a proxy. Logging in without one would
+	// bind the account to Google from the device's real IP, which is exactly the
+	// leak that gets accounts flagged.
+	if (!proxyUrl || !proxyUrl.trim()) {
+		console.error("--proxy <url> is required. Every account must have its own outbound proxy");
+		console.error("so its traffic never exits on the device's real IP.");
+		console.error("Example: pi-antigravity-rotator login --proxy http://user:pass@host:port --with-browser");
+		process.exit(1);
 	}
+	try {
+		// eslint-disable-next-line no-new
+		new URL(proxyUrl);
+	} catch {
+		console.error(`Invalid --proxy URL: ${proxyUrl}`);
+		process.exit(1);
+	}
+
+	// Verify the proxy actually works and show the egress IP Google will see,
+	// before touching any Google endpoint. Aborts on failure (fail-closed).
+	console.log(`Routing login through proxy: ${proxyUrl}`);
+	const egressIp = await verifyProxyEgress(proxyUrl);
+	if (!egressIp) {
+		console.error("Proxy verification failed — could not reach the internet through it.");
+		console.error("Fix the proxy before logging in (no request will be made on the real IP).");
+		process.exit(1);
+	}
+	console.log(`Proxy OK — Google will see egress IP: ${egressIp}`);
+	console.log();
 
 	const oauth = getOAuthClientConfig();
 	const { verifier, challenge } = generatePkce();

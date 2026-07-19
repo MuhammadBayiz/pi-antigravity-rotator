@@ -56,10 +56,13 @@ function getVersion(): string {
 	return _version!;
 }
 
-// ── Opt-out check ────────────────────────────────────────────────────
+// ── Opt-IN check ─────────────────────────────────────────────────────
+// Telemetry is OFF by default. It phones home to a third-party server
+// (telemetry.dragont.ec) including flag events, which is an unwanted signal.
+// It only runs if the operator explicitly opts in via PI_ROTATOR_TELEMETRY.
 export function isTelemetryEnabled(): boolean {
 	const env = process.env.PI_ROTATOR_TELEMETRY?.toLowerCase();
-	return env !== "off" && env !== "false" && env !== "0";
+	return env === "on" || env === "true" || env === "1";
 }
 
 // ── Insecure-endpoint warning ───────────────────────────────────────

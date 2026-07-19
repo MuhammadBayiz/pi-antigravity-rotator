@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { afterEach, describe, it } from "node:test";
+import { after, afterEach, before, describe, it } from "node:test";
+import { startDirectProxy, type TestProxy } from "./helpers/local-proxy.js";
 import { openAIToAntigravityBody } from "../src/compat.js";
 import {
 	classifyUpstreamResponse,
@@ -19,6 +20,16 @@ type Capture = {
 
 const endpointOverrides = ANTIGRAVITY_ENDPOINTS as unknown as string[];
 const originalEndpoints = [...endpointOverrides];
+
+let testProxy: TestProxy;
+let testProxyUrl = "http://proxy.test:8080";
+before(async () => {
+	testProxy = await startDirectProxy();
+	testProxyUrl = testProxy.url;
+});
+after(async () => {
+	await testProxy?.close();
+});
 
 afterEach(() => {
 	endpointOverrides.splice(0, endpointOverrides.length, ...originalEndpoints);
@@ -51,6 +62,7 @@ function createAccount(): AccountRuntime {
 			email: "test@example.com",
 			projectId: "test-project",
 			refreshToken: "refresh-token",
+			proxy: testProxyUrl,
 			label: "test-account",
 		},
 		accessToken: "access-token",

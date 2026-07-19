@@ -41,7 +41,7 @@ import {
 import { getOAuthClientConfig, isHostedOAuthConfigured } from "./oauth.js";
 import { fetchWithRetry } from "./fetch-with-retry.js";
 import { logger } from "./logger.js";
-import { getProxyAgent } from "./proxy-agent.js";
+import { requireProxyDispatcher } from "./proxy-agent.js";
 import { getUpdateInfo } from "./version-check.js";
 import { getNotifications } from "./notification-poller.js";
 import { getConfiguredAdminToken } from "./admin-auth.js";
@@ -620,10 +620,10 @@ export class AccountRotator {
     if (!account.accessToken) return;
 
     try {
-      let dispatcher: any;
-      if (account.config.proxy) {
-        dispatcher = getProxyAgent(account.config.proxy);
-      }
+      const dispatcher = requireProxyDispatcher(
+        account.config.proxy,
+        account.config.email,
+      );
       const response = await fetchWithRetry(QUOTA_API_URL, {
         method: "POST",
         headers: {
@@ -2388,10 +2388,10 @@ export class AccountRotator {
     );
     try {
       const oauth = getOAuthClientConfig();
-      let dispatcher: any;
-      if (account.config.proxy) {
-        dispatcher = getProxyAgent(account.config.proxy);
-      }
+      const dispatcher = requireProxyDispatcher(
+        account.config.proxy,
+        account.config.email,
+      );
       const response = await fetchWithRetry(TOKEN_URL, {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -3220,10 +3220,10 @@ export class AccountRotator {
 
     let response: Response;
     try {
-      let dispatcher: any;
-      if (account.config.proxy) {
-        dispatcher = getProxyAgent(account.config.proxy);
-      }
+      const dispatcher = requireProxyDispatcher(
+        account.config.proxy,
+        account.config.email,
+      );
       response = await fetch(url, {
         method: "POST",
         headers: {

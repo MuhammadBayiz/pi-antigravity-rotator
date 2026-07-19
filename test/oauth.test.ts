@@ -24,7 +24,7 @@ describe("oauth project discovery", () => {
 			});
 		}) as typeof fetch;
 
-		const result = await discoverProject("token");
+		const result = await discoverProject("token", "http://proxy.test:8080");
 		assert.equal(result.projectId, "proj-123");
 		assert.equal(result.source, "google");
 		assert.ok(result.endpoint.includes("cloudcode-pa"));
@@ -34,7 +34,7 @@ describe("oauth project discovery", () => {
 	it("falls back to a shared project id when discovery fails on every endpoint", async () => {
 		globalThis.fetch = (async () => new Response("nope", { status: 500 })) as typeof fetch;
 
-		const result = await discoverProject("token");
+		const result = await discoverProject("token", "http://proxy.test:8080");
 		assert.equal(result.projectId, "cloud-code-companion");
 		assert.equal(result.source, "google");
 	});

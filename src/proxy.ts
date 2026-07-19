@@ -7,7 +7,7 @@ import {
   type ServerResponse,
 } from "node:http";
 import { Readable } from "node:stream";
-import { getProxyAgent } from "./proxy-agent.js";
+import { requireProxyDispatcher } from "./proxy-agent.js";
 import {
   ANTIGRAVITY_ENDPOINTS,
   REQUEST_CLIENT_METADATA,
@@ -799,10 +799,12 @@ export async function forwardRequest(
   // Swap credentials
   body.project = account.config.projectId;
 
-  let dispatcher: any;
-  if (account.config.proxy) {
-    dispatcher = getProxyAgent(account.config.proxy);
-  }
+  // Fail-closed: throws if this account has no proxy, so we never forward its
+  // traffic over the device's real IP.
+  const dispatcher = requireProxyDispatcher(
+    account.config.proxy,
+    account.config.email,
+  );
 
   // Map internal display/compat names to Google upstream names (single source
   // of truth: src/types.ts:applyModelAlias)
@@ -986,10 +988,11 @@ async function handleCodeAssistPassthrough(
     : "https://cloudcode-pa.googleapis.com";
   const upstreamPath = pathname.replace(/^\/(daily-)?cloudcode-pa/, "");
 
-  let dispatcher: any;
-  if (account.config.proxy) {
-    dispatcher = getProxyAgent(account.config.proxy);
-  }
+  // Fail-closed: never send Code Assist passthrough over the real IP.
+  const dispatcher = requireProxyDispatcher(
+    account.config.proxy,
+    account.config.email,
+  );
 
   try {
     const upstreamRes = await fetch(`${upstreamHost}${upstreamPath}`, {

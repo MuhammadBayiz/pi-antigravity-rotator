@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { CLIENT_ID, CLIENT_SECRET, TOKEN_URL } from "./types.js";
 import { fetchWithRetry } from "./fetch-with-retry.js";
-import { getProxyAgent } from "./proxy-agent.js";
+import { requireProxyDispatcher } from "./proxy-agent.js";
 import { logger } from "./logger.js";
 
 const oauthLogger = logger.child("oauth");
@@ -114,7 +114,7 @@ export async function exchangeAuthorizationCode(code: string, verifier: string, 
 			redirect_uri: oauth.redirectUri,
 			code_verifier: verifier,
 		}),
-		dispatcher: proxyUrl ? getProxyAgent(proxyUrl) : undefined,
+		dispatcher: requireProxyDispatcher(proxyUrl),
 	} as any);
 
 	if (!tokenResponse.ok) {
@@ -157,7 +157,7 @@ export async function discoverProject(accessToken: string, proxyUrl?: string): P
 		"https://daily-cloudcode-pa.sandbox.googleapis.com",
 	];
 
-	const dispatcher = proxyUrl ? getProxyAgent(proxyUrl) : undefined;
+	const dispatcher = requireProxyDispatcher(proxyUrl);
 
 	for (const endpoint of endpoints) {
 		try {
@@ -206,7 +206,7 @@ export async function getUserEmail(accessToken: string, proxyUrl?: string): Prom
 	try {
 		const response = await fetchWithRetry("https://www.googleapis.com/oauth2/v1/userinfo?alt=json", {
 			headers: { Authorization: `Bearer ${accessToken}` },
-			dispatcher: proxyUrl ? getProxyAgent(proxyUrl) : undefined,
+			dispatcher: requireProxyDispatcher(proxyUrl),
 		} as any);
 		if (response.ok) {
 			const data = (await response.json()) as { email?: string };

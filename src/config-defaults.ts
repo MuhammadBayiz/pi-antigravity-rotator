@@ -3,7 +3,7 @@ import type { Config } from "./types.js";
 export function applyConfigDefaults(config: Config): Config {
 	return {
 		proxyPort: config.proxyPort || 51200,
-		bindHost: config.bindHost || process.env.PI_ROTATOR_BIND_HOST || "0.0.0.0",
+		bindHost: config.bindHost || process.env.PI_ROTATOR_BIND_HOST || "127.0.0.1",
 		routingPolicy: config.routingPolicy || "timer-first",
 		requestsPerRotation: config.requestsPerRotation || 5,
 		rotateOnQuotaDrop: config.rotateOnQuotaDrop ?? 20,
