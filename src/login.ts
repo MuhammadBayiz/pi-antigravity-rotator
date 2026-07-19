@@ -52,7 +52,7 @@ function askQuestionCancelable(prompt: string): { promise: Promise<string>; canc
 	return { promise, cancel: () => rl.close() };
 }
 
-export async function runLogin(proxyUrl?: string, openBrowser?: boolean): Promise<void> {
+export async function runLogin(proxyUrl?: string, withBrowser?: boolean, autoGrab?: boolean): Promise<void> {
 	console.log("=== Pi Antigravity Rotator - Add Account ===");
 	console.log();
 	if (proxyUrl) {
@@ -65,11 +65,18 @@ export async function runLogin(proxyUrl?: string, openBrowser?: boolean): Promis
 	const state = generateState();
 	const authUrl = buildAuthUrl(state, challenge);
 
+	// When we launched the browser ourselves, auto-detecting the redirect and
+	// closing the window afterward is opt-in via --auto-grab -- otherwise the
+	// user drives both the paste and the browser lifecycle by hand. This gate
+	// only applies when we opened the browser: without --with-browser at all,
+	// auto-detection still runs as before (there's no window of ours to close).
+	const shouldAutoGrab = !withBrowser || autoGrab;
+
 	let opened = false;
 	let browserLaunch: Awaited<ReturnType<typeof launchProxiedBrowser>> | undefined;
-	if (openBrowser) {
+	if (withBrowser) {
 		if (!proxyUrl) {
-			console.error("--open-browser requires --proxy <url> so the browser matches the account's proxy.");
+			console.error("--with-browser requires --proxy <url> so the browser matches the account's proxy.");
 			process.exit(1);
 		}
 		browserLaunch = await launchProxiedBrowser(authUrl, proxyUrl);
@@ -78,6 +85,9 @@ export async function runLogin(proxyUrl?: string, openBrowser?: boolean): Promis
 			console.log("Opened a browser window through the proxy in a fresh, isolated profile.");
 			if (browserLaunch.credentialNote) {
 				console.log(browserLaunch.credentialNote);
+			}
+			if (!autoGrab) {
+				console.log("Auto-grab is off: paste the redirect URL below when ready, and close the browser window yourself when done.");
 			}
 			console.log();
 		} else if (browserLaunch.failureReason) {
@@ -100,45 +110,60 @@ export async function runLogin(proxyUrl?: string, openBrowser?: boolean): Promis
 	console.log(`3. The redirect to ${oauth.redirectUri} is detected automatically -- or paste the full URL below if it doesn't.`);
 	console.log();
 
-	// Bind a throwaway local server on the redirect URI so Google's final
-	// redirect is captured directly, instead of requiring the user to copy it
-	// out of the browser's address bar. Races that against the manual paste
-	// prompt so either path works: whichever resolves first wins, and the
-	// loser is cancelled so it can't leak a dangling readline/socket.
-	const callbackListener = startCallbackListener(oauth.redirectUri);
 	let parsed: { code?: string; state?: string };
 
-	for (;;) {
-		const manual = askQuestionCancelable("Paste the redirect URL (leave blank to keep waiting): ");
-		const race = await Promise.race([
-			callbackListener.promise.then((v) => ({ source: "auto" as const, v })),
-			manual.promise.then((v) => ({ source: "manual" as const, v })),
-		]);
+	if (shouldAutoGrab) {
+		// Bind a throwaway local server on the redirect URI so Google's final
+		// redirect is captured directly, instead of requiring the user to copy it
+		// out of the browser's address bar. Races that against the manual paste
+		// prompt so either path works: whichever resolves first wins, and the
+		// loser is cancelled so it can't leak a dangling readline/socket.
+		const callbackListener = startCallbackListener(oauth.redirectUri);
 
-		if (race.source === "auto") {
-			manual.cancel();
-			if (race.v?.code) {
-				callbackListener.close();
-				console.log("Detected the redirect automatically.");
-				console.log();
-				parsed = race.v;
+		for (;;) {
+			const manual = askQuestionCancelable("Paste the redirect URL (leave blank to keep waiting): ");
+			const race = await Promise.race([
+				callbackListener.promise.then((v) => ({ source: "auto" as const, v })),
+				manual.promise.then((v) => ({ source: "manual" as const, v })),
+			]);
+
+			if (race.source === "auto") {
+				manual.cancel();
+				if (race.v?.code) {
+					callbackListener.close();
+					console.log("Detected the redirect automatically.");
+					console.log();
+					parsed = race.v;
+					break;
+				}
+				// Auto-detection gave up (port already in use, or timed out): fall
+				// back to a single manual prompt with no more racing.
+				const redirectUrl = await askQuestion("Paste the redirect URL: ");
+				if (!redirectUrl) {
+					console.error("No URL provided.");
+					process.exit(1);
+				}
+				parsed = parseRedirectUrl(redirectUrl);
 				break;
 			}
-			// Auto-detection gave up (port already in use, or timed out): fall
-			// back to a single manual prompt with no more racing.
+
+			if (!race.v) continue; // blank Enter: keep waiting for auto-detection
+			callbackListener.close();
+			parsed = parseRedirectUrl(race.v);
+			break;
+		}
+	} else {
+		// Auto-grab is off: no local listener, just repeated manual paste prompts.
+		for (;;) {
 			const redirectUrl = await askQuestion("Paste the redirect URL: ");
 			if (!redirectUrl) {
 				console.error("No URL provided.");
 				process.exit(1);
 			}
 			parsed = parseRedirectUrl(redirectUrl);
-			break;
+			if (parsed.code) break;
+			console.error("Could not extract an authorization code from that URL, try again.");
 		}
-
-		if (!race.v) continue; // blank Enter: keep waiting for auto-detection
-		callbackListener.close();
-		parsed = parseRedirectUrl(race.v);
-		break;
 	}
 
 	if (!parsed.code) {
@@ -153,8 +178,12 @@ export async function runLogin(proxyUrl?: string, openBrowser?: boolean): Promis
 
 	// The browser has done its job the moment we have a valid code -- close
 	// it now rather than leaving the window (and its process) running, which
-	// was also what kept the CLI itself from exiting afterward.
-	browserLaunch?.close?.();
+	// was also what kept the CLI itself from exiting afterward. Skipped when
+	// --with-browser was used without --auto-grab: the user drives the
+	// browser's lifecycle themselves in that mode.
+	if (shouldAutoGrab) {
+		browserLaunch?.close?.();
+	}
 
 	console.log();
 	console.log("Exchanging code for tokens...");
@@ -200,7 +229,7 @@ function readProxyArg(): string | undefined {
 }
 
 if (process.argv[1]?.includes("login")) {
-	runLogin(readProxyArg(), process.argv.includes("--open-browser"))
+	runLogin(readProxyArg(), process.argv.includes("--with-browser"), process.argv.includes("--auto-grab"))
 		.then(() => process.exit(0))
 		.catch((err) => {
 			console.error("Login failed:", err);

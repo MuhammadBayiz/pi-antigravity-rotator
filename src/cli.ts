@@ -33,8 +33,9 @@ switch (command) {
     const { runLogin } = await import("./login.js");
     const proxyIdx = args.indexOf("--proxy");
     const proxyUrl = proxyIdx !== -1 ? args[proxyIdx + 1] : undefined;
-    const openBrowser = args.includes("--open-browser");
-    await runLogin(proxyUrl, openBrowser);
+    const withBrowser = args.includes("--with-browser");
+    const autoGrab = args.includes("--auto-grab");
+    await runLogin(proxyUrl, withBrowser, autoGrab);
     process.exit(0);
     break;
   }
@@ -94,10 +95,22 @@ switch (command) {
       "    --proxy <url>                  Route this login through a SOCKS5/HTTP proxy",
     );
     console.log(
-      "    --open-browser                 Launch a browser through that same proxy (requires --proxy)",
+      "    --with-browser                 Launch a browser through that same proxy (requires --proxy)",
     );
     console.log(
       "                                   (socks5:// or socks5h://; saved on the account)",
+    );
+    console.log(
+      "      --auto-grab                  With --with-browser: auto-detect the redirect and",
+    );
+    console.log(
+      "                                   close the browser once the code is captured.",
+    );
+    console.log(
+      "                                   Without it, the browser stays open and the redirect",
+    );
+    console.log(
+      "                                   URL must be pasted manually.",
     );
     console.log(
       "  pi-antigravity-rotator status    Show account status (JSON)",

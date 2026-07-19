@@ -219,34 +219,47 @@ Note that a system-wide VPN/proxy app is a single tunnel: if you leave it pointe
 at one port while logging in to several accounts back-to-back, all of those
 consents exit through the same IP regardless of which port each account's
 `accounts.json` entry references. Re-point the VPN to match the specific port
-*before each individual login*, or use `--open-browser` below, which does this
+*before each individual login*, or use `--with-browser` below, which does this
 automatically per-invocation with no VPN app involved. Also use a fresh/incognito
 browser profile per account -- Google's correlation signal isn't limited to IP;
 a reused browser session (cookies, device fingerprint) can link accounts even
 when each one's network path is genuinely distinct.
 
-#### `--open-browser`: launch a matching browser automatically
+#### `--with-browser`: launch a matching browser automatically
 
 ```bash
-pi-antigravity-rotator login --proxy "socks5h://user:password@proxy-ip:port" --open-browser
+pi-antigravity-rotator login --proxy "socks5h://user:password@proxy-ip:port" --with-browser
 ```
 
 Launches a browser in a **fresh, isolated temporary profile** (no leftover
 cookies from a previous account's session) with `--proxy-server` pointed at
 that same proxy, then navigates it straight to the Google sign-in URL. This
-removes the manual "reconfigure the VPN, then copy the URL" steps entirely --
+removes the manual "reconfigure the VPN, then copy the URL" step entirely --
 just complete the sign-in in the window that opens.
 
-The redirect back to `localhost` is also **detected automatically**: the CLI
-binds a throwaway local server on the configured redirect URI (default
-`http://localhost:51121/oauth-callback`) while it waits, so as soon as Google
-sends the browser back there the login continues on its own -- no copying the
-URL out of the address bar needed. This works whether or not you used
-`--open-browser` (it also catches the redirect if you opened the sign-in URL
-in your own regular browser). You can still paste the redirect URL manually
-at the prompt if auto-detection can't bind the port (e.g. something else is
-already using it) or you'd rather not wait. Once the code is captured, the
-browser window opened by `--open-browser` is closed automatically too.
+By default `--with-browser` still expects you to paste the redirect URL
+yourself once you land back on `localhost`, and leaves the browser window
+open for you to close. Add **`--auto-grab`** as a sub-option to get the fully
+hands-off behavior instead:
+
+```bash
+pi-antigravity-rotator login --proxy "socks5h://user:password@proxy-ip:port" --with-browser --auto-grab
+```
+
+With `--auto-grab`, the redirect back to `localhost` is **detected
+automatically**: the CLI binds a throwaway local server on the configured
+redirect URI (default `http://localhost:51121/oauth-callback`) while it
+waits, so as soon as Google sends the browser back there the login continues
+on its own -- no copying the URL out of the address bar needed. Once the
+code is captured, the browser window is also **closed automatically**. You
+can still paste the redirect URL manually at the prompt if auto-detection
+can't bind the port (e.g. something else is already using it) or you'd
+rather not wait.
+
+Without `--with-browser` at all (plain manual-URL login), the automatic
+redirect-detection listener still runs as before -- it also catches the
+redirect if you opened the sign-in URL yourself in your own regular browser.
+`--auto-grab` only changes behavior when it's paired with `--with-browser`.
 
 Requirements and caveats:
 - Needs a real browser binary. It checks the `BROWSER` env var first (the
@@ -268,7 +281,7 @@ Requirements and caveats:
   `socks5://`/`socks5h://` proxy is rewritten to `http://` on the same
   host/port for the browser launch only -- this relies on the proxy provider
   also accepting HTTP CONNECT on that port, which is common but
-  provider-dependent. If your proxy only speaks SOCKS5, `--open-browser` will
+  provider-dependent. If your proxy only speaks SOCKS5, `--with-browser` will
   print the credentials for you to enter into Chromium's proxy-auth prompt,
   or (if that provider genuinely has no HTTP mode) it just won't authenticate
   -- fall back to the VPN-app or manual-URL approach for that account.
