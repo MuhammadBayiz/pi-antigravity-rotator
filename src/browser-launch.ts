@@ -258,6 +258,8 @@ export interface BrowserLaunchResult {
 	failureReason?: string;
 	/** Present when ok is true: terminates the launched browser window + local proxy. */
 	close?: () => void;
+	/** Present when ok is true: resolves when the browser window/process exits. */
+	whenClosed?: Promise<void>;
 }
 
 /**
@@ -340,8 +342,15 @@ export async function launchProxiedBrowser(
 	// unref() -- the browser stays up for the user to complete sign-in.
 	child.stderr?.destroy();
 	child.unref();
+	// Resolves when the browser process exits (e.g. the user closes the window).
+	// Callers that want to keep the proxy alive for the browsing session await
+	// this; login does not (it drives its own lifecycle).
+	const whenClosed = new Promise<void>((resolve) => {
+		child.once("exit", () => resolve());
+	});
 	return {
 		ok: true,
+		whenClosed,
 		close: () => {
 			try {
 				child.kill();

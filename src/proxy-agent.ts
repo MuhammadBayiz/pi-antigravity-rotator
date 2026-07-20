@@ -72,3 +72,22 @@ export function requireProxyDispatcher(
 export function hasProxyConfigured(proxyUrl: string | undefined | null): boolean {
   return !!proxyUrl && proxyUrl.trim().length > 0;
 }
+
+/**
+ * Confirm the proxy actually carries traffic and return the public egress IP
+ * (what Google will see), using the SAME undici dispatcher the runtime uses.
+ * Returns null on any failure so callers can fail-closed.
+ */
+export async function verifyProxyEgress(proxyUrl: string): Promise<string | null> {
+  try {
+    const res = await fetch("https://api.ipify.org?format=text", {
+      dispatcher: getProxyAgent(proxyUrl),
+      signal: AbortSignal.timeout(15_000),
+    } as unknown as RequestInit);
+    if (!res.ok) return null;
+    const ip = (await res.text()).trim();
+    return /^[0-9a-fA-F:.]+$/.test(ip) && ip.length >= 4 ? ip : null;
+  } catch {
+    return null;
+  }
+}

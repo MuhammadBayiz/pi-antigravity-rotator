@@ -9,30 +9,11 @@ import { addAccountToConfig, ensurePiAuthConfig, ensurePiModelsConfig, loadOrCre
 import { buildAuthUrl, discoverProject, exchangeAuthorizationCode, generatePkce, generateState, getOAuthClientConfig, getUserEmail } from "./oauth.js";
 import { launchProxiedBrowser } from "./browser-launch.js";
 import { startCallbackListener } from "./oauth-callback-listener.js";
-import { getProxyAgent } from "./proxy-agent.js";
+import { verifyProxyEgress } from "./proxy-agent.js";
 import type { AccountConfig } from "./types.js";
 import { getAccountsPath } from "./paths.js";
 
 const ACCOUNTS_FILE = getAccountsPath();
-
-/**
- * Confirm the proxy actually carries traffic and return the public egress IP
- * (what Google will see), using the SAME undici dispatcher the runtime uses.
- * Returns null on any failure so the caller can fail-closed.
- */
-async function verifyProxyEgress(proxyUrl: string): Promise<string | null> {
-	try {
-		const res = await fetch("https://api.ipify.org?format=text", {
-			dispatcher: getProxyAgent(proxyUrl),
-			signal: AbortSignal.timeout(15_000),
-		} as unknown as RequestInit);
-		if (!res.ok) return null;
-		const ip = (await res.text()).trim();
-		return /^[0-9a-fA-F:.]+$/.test(ip) && ip.length >= 4 ? ip : null;
-	} catch {
-		return null;
-	}
-}
 
 function parseRedirectUrl(input: string): { code?: string; state?: string } {
 	const value = input.trim();

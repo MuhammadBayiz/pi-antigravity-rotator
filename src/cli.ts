@@ -39,6 +39,14 @@ switch (command) {
     process.exit(0);
     break;
   }
+  case "browse": {
+    const { initDb } = await import("./db-store.js");
+    await initDb();
+    const { runBrowse } = await import("./browse.js");
+    await runBrowse(args);
+    process.exit(0);
+    break;
+  }
   case "status": {
     const { initDb, closeDb } = await import("./db-store.js");
     const {
@@ -111,6 +119,21 @@ switch (command) {
     );
     console.log(
       "                                   URL must be pasted manually.",
+    );
+    console.log(
+      "  pi-antigravity-rotator browse    Open a URL through an account's proxy",
+    );
+    console.log(
+      "    --account <email>              Route the browser through this account's proxy",
+    );
+    console.log(
+      "    --proxy <url>                  ...or through this proxy directly",
+    );
+    console.log(
+      "                                   e.g. browse --account you@gmail.com https://accounts.google.com/...",
+    );
+    console.log(
+      "                                   (for the 'verify your account' link; stays open until you close it)",
     );
     console.log(
       "  pi-antigravity-rotator status    Show account status (JSON)",
