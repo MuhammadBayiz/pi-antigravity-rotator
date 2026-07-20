@@ -51,7 +51,7 @@ import {
   handleCliLoginApi,
 } from "./onboarding.js";
 import { requireAdmin } from "./admin-auth.js";
-import { requireClientKey } from "./client-auth.js";
+import { requireClientKey, getConfiguredClientKeys, clientKeyValueOk } from "./client-auth.js";
 import { PayloadTooLargeError, readLimitedBody } from "./body-limit.js";
 import { validateConfig, validateProxyRequestBody } from "./validators.js";
 import { logger } from "./logger.js";
@@ -2154,6 +2154,25 @@ export function startProxy(
       attachMitm(server, {
         certDir: join(getConfigDir(), "mitm-certs"),
         getBlindTunnelProxy: () => rotator.getAnyProxy(),
+        // Require a valid client key on the CONNECT (agy sends it as
+        // HTTPS_PROXY=http://<key>@host:port -> Proxy-Authorization: Basic). Open
+        // when no keys are configured (local loopback default). This is the wall
+        // for the forward-proxy path, which is otherwise exempt from the HTTP
+        // client-key guard.
+        authorizeConnect: (proxyAuth) => {
+          if (getConfiguredClientKeys().size === 0) return true;
+          let key: string | undefined;
+          if (proxyAuth && /^basic /i.test(proxyAuth)) {
+            try {
+              key = Buffer.from(proxyAuth.slice(6).trim(), "base64")
+                .toString("utf8")
+                .split(":")[0];
+            } catch {
+              key = undefined;
+            }
+          }
+          return clientKeyValueOk(key);
+        },
       });
     } catch (err) {
       log(`MITM attach failed (continuing without it): ${err}`, rotator, "error");

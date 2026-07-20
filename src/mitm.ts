@@ -209,6 +209,15 @@ export interface MitmOptions {
 	certDir: string;
 	/** Proxy used to blind-tunnel non-terminated hosts (agy's own oauth/telemetry). */
 	getBlindTunnelProxy: () => string | undefined;
+	/**
+	 * Optional gate on the CONNECT itself. Given the request's Proxy-Authorization
+	 * header, return false to reject with 407. This is the wall for the forward-proxy
+	 * (agy) path when the rotator is exposed as a shared service: agy's MITM traffic
+	 * is exempt from the HTTP client-key guard (client-auth.ts), so without this the
+	 * forward proxy would be an open relay to the account pool. Returns true (open)
+	 * when no client keys are configured, mirroring the HTTP guard's local default.
+	 */
+	authorizeConnect?: (proxyAuthorization: string | undefined) => boolean;
 }
 
 /**
@@ -237,6 +246,20 @@ export function attachMitm(server: Server, opts: MitmOptions): CaFiles {
 			return;
 		}
 		clientSocket.on("error", () => clientSocket.destroy());
+
+		// Gate the forward-proxy path: agy must present a valid client key as
+		// Proxy-Authorization (HTTPS_PROXY=http://<key>@host:port). Without this,
+		// the MITM path -- which is exempt from the HTTP client-key guard -- would
+		// be an open relay to the Google account pool once exposed.
+		if (opts.authorizeConnect && !opts.authorizeConnect(req.headers["proxy-authorization"])) {
+			clientSocket.write(
+				"HTTP/1.1 407 Proxy Authentication Required\r\n" +
+					'Proxy-Authenticate: Basic realm="pi-antigravity-rotator"\r\n' +
+					"Connection: close\r\n\r\n",
+			);
+			clientSocket.destroy();
+			return;
+		}
 
 		if (MITM_BLOCK_HOSTS.has(host)) {
 			// Silently drop (agy telemetry). Fire-and-forget on agy's side.

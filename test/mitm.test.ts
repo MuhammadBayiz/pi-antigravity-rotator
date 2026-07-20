@@ -81,3 +81,55 @@ describe("MITM forward proxy", () => {
 		await assert.rejects(connectThenTls("play.googleapis.com"));
 	});
 });
+
+describe("MITM CONNECT authorization (forward-proxy client key)", () => {
+	let authServer: Server;
+	let authPort: number;
+	const GOOD = "Basic " + Buffer.from("secret-key:").toString("base64");
+
+	before(async () => {
+		authServer = createServer((req, res) => {
+			res.writeHead(200, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ ok: true }));
+		});
+		attachMitm(authServer, {
+			certDir,
+			getBlindTunnelProxy: () => undefined,
+			// Accept only the CONNECT whose Proxy-Authorization carries "secret-key".
+			authorizeConnect: (pa) =>
+				!!pa && pa === GOOD,
+		});
+		await new Promise<void>((r) => authServer.listen(0, "127.0.0.1", () => r()));
+		authPort = (authServer.address() as { port: number }).port;
+	});
+	after(() => authServer.close());
+
+	// Send a CONNECT with an optional Proxy-Authorization header; resolve the raw
+	// status line so we can distinguish 407 from 200.
+	function connectStatus(proxyAuth?: string): Promise<string> {
+		return new Promise((resolve, reject) => {
+			const raw = netConnect(authPort, "127.0.0.1", () => {
+				let head = "CONNECT cloudcode-pa.googleapis.com:443 HTTP/1.1\r\nHost: cloudcode-pa.googleapis.com:443\r\n";
+				if (proxyAuth) head += `Proxy-Authorization: ${proxyAuth}\r\n`;
+				raw.write(head + "\r\n");
+			});
+			raw.once("data", (chunk) => {
+				const line = chunk.toString().split("\r\n")[0];
+				raw.destroy();
+				resolve(line);
+			});
+			raw.on("error", reject);
+			setTimeout(() => reject(new Error("timeout")), 8_000);
+		});
+	}
+
+	it("rejects a CONNECT with no client key (407)", async () => {
+		assert.match(await connectStatus(), /407/);
+	});
+	it("rejects a CONNECT with a wrong client key (407)", async () => {
+		assert.match(await connectStatus("Basic " + Buffer.from("nope:").toString("base64")), /407/);
+	});
+	it("accepts a CONNECT carrying the correct client key (200)", async () => {
+		assert.match(await connectStatus(GOOD), /200/);
+	});
+});
