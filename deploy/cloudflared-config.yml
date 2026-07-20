@@ -15,13 +15,23 @@ tunnel: REPLACE_WITH_TUNNEL_UUID
 credentials-file: /home/kizoo/.cloudflared/REPLACE_WITH_TUNNEL_UUID.json
 
 ingress:
+  # (1) HTTP API for the CI Action: /v1/messages etc. Reached with a normal HTTPS
+  #     client + CF Access service token + x-api-key.
   - hostname: rotator.REPLACE_WITH_YOUR_DOMAIN
     service: http://127.0.0.1:51200
     originRequest:
       # The rotator streams SSE; don't let cloudflared buffer or time it out early.
       disableChunkedEncoding: false
       connectTimeout: 30s
-      # keep long-lived streaming responses alive
-      noHappyEyeballs: false
+
+  # (2) Raw-TCP for agy's forward proxy. agy speaks HTTPS_PROXY (CONNECT), which a
+  #     plain HTTP ingress cannot carry -- so expose the SAME rotator port as TCP.
+  #     The phone reaches this via `cloudflared access tcp` (see KIZOO-RUNBOOK §6),
+  #     which authenticates to CF Access and gives agy a local 127.0.0.1:51200.
+  #     This is what lets agy route through Cloudflare's IPv4 anycast with no VPN
+  #     and no raw IPv6 to the box.
+  - hostname: rotator-proxy.REPLACE_WITH_YOUR_DOMAIN
+    service: tcp://127.0.0.1:51200
+
   # Everything else is rejected at the tunnel.
   - service: http_status:404

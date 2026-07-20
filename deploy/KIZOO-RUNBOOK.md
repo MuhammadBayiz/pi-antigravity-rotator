@@ -1,16 +1,19 @@
 # Deploy the shared rotator on `kizoo-prod`
 
-Runs **one** rotator as a shared API. Two consumers:
-- **CI PR-review Action** → HTTPS `/v1/messages` via **Cloudflare Tunnel + Access**.
-- **Local agy (phone)** → forward-proxy/MITM via an **SSH `-L` tunnel** (agy has no endpoint
-  override, so it can only be routed through a forward proxy).
+Runs **one** rotator as a shared API. Both consumers reach it through **Cloudflare Tunnel +
+Access** — no VPN, no raw IPv6:
+- **CI PR-review Action** → HTTPS `/v1/messages` on `rotator.<domain>` (HTTP ingress).
+- **Local agy (phone)** → forward-proxy/MITM over `rotator-proxy.<domain>` (raw-TCP ingress),
+  reached with `cloudflared access tcp`. agy has no endpoint override, so it can only be routed
+  through a forward proxy — a plain HTTP ingress can't carry its CONNECT, hence the TCP ingress.
 
-The rotator binds **loopback only**; its raw port is never on the internet. Google only ever sees
-each account's Decodo residential IP (sticky is tied to the proxy creds, not the client IP, so
-running from the VPS doesn't change the egress).
+The rotator binds **loopback only**; its raw port is never on the internet. cloudflared reaches it
+on loopback for both ingresses. Google only ever sees each account's Decodo residential IP (sticky
+is tied to the proxy creds, not the client IP, so running from the VPS doesn't change the egress).
 
-Verified facts: `kizoo-prod` is Debian 13, Node 22, **IPv6-only** (Cloudflare bridges IPv4 for the
-CI); `AllowTcpForwarding yes` (SSH tunnel works); port 51200 free; outbound to Google/Decodo works.
+Verified facts: `kizoo-prod` is Debian 13, Node 22, **IPv6-only** — Cloudflare's dual-stack anycast
+gives both the IPv4-only CI runners and the (VPN-less, IPv4) phone a way in; port 51200 free;
+outbound to Google/Decodo works. `cloudflared` 2026.6.1 is already installed on the phone.
 
 ---
 
@@ -85,11 +88,15 @@ sudo systemctl enable --now cloudflared
 
 In the Cloudflare **Zero Trust** dashboard:
 1. **Access → Service Auth → Create Service Token** → save the `Client ID` + `Client Secret`.
-2. **Access → Applications → Add → Self-hosted**, domain `rotator.<your-domain>`.
-3. Policy: **Action = Service Auth**, include the service token from step 1. (No interactive login.)
+   (Optionally create two tokens — one for CI, one for the phone — for independent revocation.)
+2. **Access → Applications → Add → Self-hosted** for **`rotator.<your-domain>`** (the CI HTTP API),
+   policy **Action = Service Auth** including the token.
+3. Repeat: add a second Self-hosted application for **`rotator-proxy.<your-domain>`** (agy's TCP
+   forward proxy), same **Service Auth** policy/token.
 
-Now `rotator.<your-domain>` only answers requests carrying that service token — the rotator's
-client-key is a second, independent wall behind it.
+Now both hostnames only answer requests carrying the service token — for the CI, the rotator's
+client-key is a second independent wall; for agy, the MITM path is exempt from the client-key and
+Access is the wall.
 
 Verify from any third machine:
 
@@ -99,17 +106,34 @@ curl -s -H "CF-Access-Client-Id: <id>" -H "CF-Access-Client-Secret: <secret>" \
      -H "x-api-key: <client-key>" https://rotator.<your-domain>/v1/models | head          # 200
 ```
 
-## 6. Point the phone's agy at the VPS (SSH tunnel + trust the VPS CA)
+## 6. Point the phone's agy at the VPS (via Cloudflare — no VPN, no SSH)
 
-Copy the VPS MITM CA to the phone and install it, then rewire `~/.local/bin/agy` and the
-SessionStart hook. (These edits are applied on the phone by Claude once §1–§5 are green — the
-wrapper keeps an `ssh -f -N -o ExitOnForwardFailure=yes -L 51200:127.0.0.1:51200 kizoo-prod`
-tunnel up and exports `HTTPS_PROXY=http://127.0.0.1:51200` + `SSL_CERT_FILE=<VPS ca.crt>`.)
+agy reaches the rotator through Cloudflare's TCP ingress, so the phone needs neither the VPN nor
+raw IPv6 — `cloudflared access tcp` connects out to Cloudflare over IPv4.
+
+First copy the VPS MITM CA to the phone (over the tunnel is fine, or grab it once while on the VPN):
 
 ```bash
-scp -o BatchMode=yes kizoo-prod:~/.pi-antigravity-rotator/mitm-certs/ca.crt \
-    ~/.pi-antigravity-rotator/mitm-certs/kizoo-ca.crt
+# on the VPS: print the CA so you can save it on the phone
+cat ~/.pi-antigravity-rotator/mitm-certs/ca.crt
+# on the phone: save it to ~/.pi-antigravity-rotator/mitm-certs/kizoo-ca.crt
 ```
+
+Then Claude rewires `~/.local/bin/agy` + the SessionStart hook so that each run:
+1. Starts (if down) a background `cloudflared access tcp` that authenticates with the CF Access
+   service token and exposes the VPS rotator as a local port:
+   ```bash
+   cloudflared access tcp \
+     --hostname rotator-proxy.<your-domain> \
+     --url 127.0.0.1:51200 \
+     --service-token-id "$CF_ACCESS_CLIENT_ID" \
+     --service-token-secret "$CF_ACCESS_CLIENT_SECRET"
+   ```
+2. Exports `HTTPS_PROXY=http://127.0.0.1:51200` (+ HTTP_PROXY/ALL_PROXY/lowercase),
+   `SSL_CERT_FILE=<phone kizoo-ca.crt>`, `AGY_AUTO_UPDATE=0`, `PI_ROTATOR_TELEMETRY=off`; then `exec`s agy.
+
+No local rotator and no accounts on the phone; the CF Access service token + the VPS CA are the only
+things stored locally.
 
 ## 7. GitHub Action
 
@@ -124,6 +148,6 @@ workflow if you prefer another catalog id.
 - [ ] VPS `curl 127.0.0.1:51200/v1/models` → 401; with `x-api-key` → 200.
 - [ ] External `curl https://rotator.<domain>/v1/models` → 403; with CF token + `x-api-key` → 200.
 - [ ] `workflow_dispatch`/test PR → review comment posted; rotator logs show rotation + Decodo egress.
-- [ ] Phone `agy` task runs; VPS logs show account rotation + Decodo egress; `ss -tnp` on the VPS
-      shows **no** direct Google connection from the box IP.
-- [ ] Drop the SSH tunnel → agy fails (never falls back to the real IP).
+- [ ] Phone `agy` task runs (VPN **off**) via `cloudflared access tcp`; VPS logs show account
+      rotation + Decodo egress; `ss -tnp` on the VPS shows **no** direct Google connection from the box IP.
+- [ ] Kill the `cloudflared access tcp` client → agy fails (never falls back to the real IP).
