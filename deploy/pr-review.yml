@@ -64,7 +64,7 @@ jobs:
           PROMPT="You are a senior code reviewer. Review the following pull request diff. Call out bugs, security issues, and concrete improvements. Be concise, use markdown, and skip praise. If it looks fine, say so briefly."
 
           jq -n --rawfile diff pr.diff --arg prompt "$PROMPT" '{
-            model: "gemini-3-pro-high",
+            model: "gemini-3.1-pro-high",
             max_tokens: 1500,
             messages: [
               { role: "user",
@@ -94,7 +94,7 @@ jobs:
             echo
             cat review.md
             echo
-            echo "_model: gemini-3-pro-high · via pi-antigravity-rotator_"
+            echo "_model: gemini-3.1-pro-high · via pi-antigravity-rotator_"
           } > comment.md
 
       - name: Post review comment

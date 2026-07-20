@@ -19,6 +19,18 @@ outbound to Google/Decodo works. `cloudflared` 2026.6.1 is already installed on 
 
 ## 1. Install the rotator
 
+> **Node 24+ required (26 recommended).** The per-account SOCKS dispatcher
+> (`fetch-socks` → undici v8) is handed to the global `fetch`, which uses Node's
+> *built-in* undici. Node 22's built-in undici is too old and every proxied fetch
+> fails with `UND_ERR_INVALID_ARG invalid onRequestStart method` (surfaces as
+> `Token refresh error: fetch failed`, all accounts stuck `status=error`). Match
+> the phone (Node 26.3.1). Install e.g.:
+> ```bash
+> curl -fsSL -o /tmp/node.tar.xz https://nodejs.org/dist/v26.3.1/node-v26.3.1-linux-x64.tar.xz
+> tar -xf /tmp/node.tar.xz -C /opt        # -> /opt/node-v26.3.1-linux-x64/bin/node
+> ```
+> Point the systemd `ExecStart` at that node binary (see §3).
+
 ```bash
 ssh kizoo-prod
 git clone https://github.com/MuhammadBayiz/pi-antigravity-rotator.git pi-antigravity-rotator-fork

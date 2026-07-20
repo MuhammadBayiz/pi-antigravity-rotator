@@ -28,8 +28,10 @@ Environment=PI_ROTATOR_DIR=/home/kizoo/.pi-antigravity-rotator
 EnvironmentFile=/home/kizoo/.pi-antigravity-rotator/rotator.env
 
 # Run the tsx-bootstrapped bin directly with node from the repo (no reliance on a
-# global-install PATH). Set the node path to `command -v node` on your box.
-ExecStart=/usr/bin/node /home/kizoo/pi-antigravity-rotator-fork/bin/pi-antigravity-rotator.js start
+# global-install PATH). Node 24+ REQUIRED (26 recommended) — Node 22's built-in
+# undici breaks the SOCKS proxy dispatcher (see KIZOO-RUNBOOK §1). Point this at a
+# Node >=26 binary, e.g. /opt/node-v26.3.1-linux-x64/bin/node.
+ExecStart=/opt/node-v26.3.1-linux-x64/bin/node /home/kizoo/pi-antigravity-rotator-fork/bin/pi-antigravity-rotator.js start
 
 Restart=on-failure
 RestartSec=3
