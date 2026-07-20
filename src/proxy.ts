@@ -9,7 +9,7 @@ import {
 import { Readable } from "node:stream";
 import { join } from "node:path";
 import { requireProxyDispatcher } from "./proxy-agent.js";
-import { attachMitm } from "./mitm.js";
+import { attachMitm, MITM_TERMINATE_HOSTS } from "./mitm.js";
 import { getConfigDir } from "./paths.js";
 import {
   ANTIGRAVITY_ENDPOINTS,
@@ -1025,6 +1025,87 @@ async function handleCodeAssistPassthrough(
   }
 }
 
+/**
+ * Transparent forward for any MITM-terminated request that matched no specific
+ * route -- e.g. agy's eligibility check polling "get operation status" (a GET),
+ * or any other Code Assist endpoint we don't special-case. Forwards the request
+ * verbatim (method, path, query, body) to the real Google host through a rotated
+ * account's proxy, swapping in that account's token. Without this, such requests
+ * hit the rotator's generic 404 ({"error":"Not found"}).
+ */
+async function handleMitmTransparent(
+  req: IncomingMessage,
+  res: ServerResponse,
+  rotator: AccountRotator,
+  host: string,
+): Promise<void> {
+  const method = (req.method || "GET").toUpperCase();
+  let bodyBuffer: Buffer | undefined;
+  if (method !== "GET" && method !== "HEAD") {
+    try {
+      bodyBuffer = await readLimitedBody(req);
+    } catch (err) {
+      if (err instanceof PayloadTooLargeError) {
+        res.writeHead(413, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Payload too large", limitBytes: err.limitBytes }));
+        return;
+      }
+      throw err;
+    }
+  }
+
+  const account = await rotator.getActiveAccount();
+  if (!account) {
+    res.writeHead(503, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "All accounts exhausted or disabled" }));
+    return;
+  }
+  try {
+    await rotator.ensureValidToken(account);
+  } catch (err) {
+    log(`MITM transparent: token refresh failed: ${err}`, rotator, "error");
+    res.writeHead(502, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Account token refresh failed" }));
+    return;
+  }
+
+  // Fail-closed: never forward over the real IP.
+  const dispatcher = requireProxyDispatcher(account.config.proxy, account.config.email);
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${account.accessToken}`,
+    "User-Agent": REQUEST_USER_AGENT,
+    "X-Goog-Api-Client": REQUEST_GOOG_API_CLIENT,
+    "Client-Metadata": REQUEST_CLIENT_METADATA,
+  };
+  const ct = req.headers["content-type"];
+  if (bodyBuffer && bodyBuffer.length && typeof ct === "string") headers["Content-Type"] = ct;
+  const accept = req.headers["accept"];
+  if (typeof accept === "string") headers["Accept"] = accept;
+
+  try {
+    const upstreamRes = await fetch(`https://${host}${req.url}`, {
+      method,
+      headers,
+      body: bodyBuffer,
+      dispatcher,
+    } as any);
+
+    const outHeaders: Record<string, string> = {};
+    const ctOut = upstreamRes.headers.get("content-type");
+    if (ctOut) outHeaders["Content-Type"] = ctOut;
+    res.writeHead(upstreamRes.status, outHeaders);
+    if (upstreamRes.body) {
+      Readable.fromWeb(upstreamRes.body as any).pipe(res);
+    } else {
+      res.end();
+    }
+  } catch (err) {
+    log(`MITM transparent forward error: ${err}`, rotator, "error");
+    if (!res.headersSent) res.writeHead(502, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Upstream forward failed" }));
+  }
+}
+
 export async function withRotation<T>(
   rotator: AccountRotator,
   model: string,
@@ -2023,6 +2104,22 @@ export function startProxy(
           res.end(JSON.stringify({ error: "Internal proxy error" }));
         },
       );
+      return;
+    }
+
+    // MITM-terminated request that matched no route: transparently forward it to
+    // the real Google host through a rotated account's proxy (e.g. agy's
+    // eligibility "get operation status" GET). Identified by a real Google Host
+    // header -- normal reverse-proxy clients send Host: localhost/127.0.0.1.
+    const hostHeader = (req.headers.host || "").split(":")[0].toLowerCase();
+    if (MITM_TERMINATE_HOSTS.has(hostHeader)) {
+      handleMitmTransparent(req, res, rotator, hostHeader).catch((err) => {
+        log(`MITM transparent route error: ${err}`, rotator, "error");
+        if (!res.headersSent) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+        }
+        res.end(JSON.stringify({ error: "Internal proxy error" }));
+      });
       return;
     }
 
