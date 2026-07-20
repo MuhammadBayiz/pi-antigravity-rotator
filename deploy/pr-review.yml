@@ -1,0 +1,107 @@
+# Drop this in the PR-review repo at .github/workflows/pr-review.yml
+#
+# It sends the PR diff to the shared rotator's Anthropic-compatible endpoint
+# (/v1/messages) through the Cloudflare Tunnel, then posts the review as a PR
+# comment. It is a thin curl+jq script with no coupling to rotator internals.
+#
+# Repo secrets required (Settings > Secrets and variables > Actions):
+#   ROTATOR_URL             e.g. https://rotator.example.com   (no trailing slash)
+#   CF_ACCESS_CLIENT_ID     Cloudflare Access service-token client id
+#   CF_ACCESS_CLIENT_SECRET Cloudflare Access service-token client secret
+#   ROTATOR_KEY             one of PI_ROTATOR_CLIENT_KEYS on the rotator
+#
+# Uses the `pull_request` trigger: PRs from forks intentionally receive NO
+# secrets, so the job detects that and skips cleanly (never leaks the key to
+# untrusted PR code).
+
+name: PR Review (rotator)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: pr-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Collect PR diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr diff "${{ github.event.pull_request.number }}" \
+            --repo "${{ github.repository }}" > pr.diff || true
+          # Cap the diff so we don't blow past the model's context / max_tokens.
+          head -c 60000 pr.diff > pr.diff.capped && mv pr.diff.capped pr.diff
+          echo "diff bytes: $(wc -c < pr.diff)"
+
+      - name: Ask the rotator for a review
+        env:
+          ROTATOR_URL: ${{ secrets.ROTATOR_URL }}
+          CF_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          ROTATOR_KEY: ${{ secrets.ROTATOR_KEY }}
+        run: |
+          set -euo pipefail
+          # Fork PRs get no secrets — skip without failing.
+          if [ -z "${ROTATOR_URL:-}" ] || [ -z "${ROTATOR_KEY:-}" ]; then
+            echo "No rotator secrets present (fork PR?) — skipping review."
+            exit 0
+          fi
+
+          PROMPT="You are a senior code reviewer. Review the following pull request diff. Call out bugs, security issues, and concrete improvements. Be concise, use markdown, and skip praise. If it looks fine, say so briefly."
+
+          jq -n --rawfile diff pr.diff --arg prompt "$PROMPT" '{
+            model: "gemini-3-pro-high",
+            max_tokens: 1500,
+            messages: [
+              { role: "user",
+                content: ($prompt + "\n\n```diff\n" + $diff + "\n```") }
+            ]
+          }' > body.json
+
+          HTTP=$(curl -sS -o resp.json -w '%{http_code}' \
+            -H "CF-Access-Client-Id: ${CF_ID}" \
+            -H "CF-Access-Client-Secret: ${CF_SECRET}" \
+            -H "x-api-key: ${ROTATOR_KEY}" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "content-type: application/json" \
+            --data @body.json \
+            "${ROTATOR_URL}/v1/messages") || { echo "curl failed"; exit 1; }
+
+          echo "rotator HTTP ${HTTP}"
+          if [ "${HTTP}" != "200" ]; then
+            echo "::error::rotator returned ${HTTP}"; head -c 2000 resp.json; exit 1
+          fi
+
+          # Anthropic response shape: .content[].text
+          jq -r '[.content[]?.text] | join("\n") | select(length>0) // "No review produced."' \
+            resp.json > review.md
+          {
+            echo "## 🤖 Automated review"
+            echo
+            cat review.md
+            echo
+            echo "_model: gemini-3-pro-high · via pi-antigravity-rotator_"
+          } > comment.md
+
+      - name: Post review comment
+        if: ${{ hashFiles('comment.md') != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment "${{ github.event.pull_request.number }}" \
+            --repo "${{ github.repository }}" \
+            --body-file comment.md

@@ -51,6 +51,7 @@ import {
   handleCliLoginApi,
 } from "./onboarding.js";
 import { requireAdmin } from "./admin-auth.js";
+import { requireClientKey } from "./client-auth.js";
 import { PayloadTooLargeError, readLimitedBody } from "./body-limit.js";
 import { validateConfig, validateProxyRequestBody } from "./validators.js";
 import { logger } from "./logger.js";
@@ -1979,6 +1980,17 @@ export function startProxy(
       }
       return;
     }
+
+    // --- Serving tier (everything below spends the Google account pool) ---
+    // Gate the externally-reachable serving routes behind a client key. This is
+    // the wall that keeps the rotator from being an open relay once it's exposed
+    // as a shared API (e.g. via a Cloudflare Tunnel for a CI consumer). When no
+    // client keys are configured (the local loopback default) the guard is open,
+    // so nothing changes for existing single-user setups. agy's own forward-proxy
+    // (MITM) traffic arrives on a `__mitmAuthorized` socket and is exempt -- it
+    // already authenticated by reaching the rotator (loopback / SSH tunnel) and
+    // speaks Google's protocol with a Google token, not our client key.
+    if (!requireClientKey(req, res)) return;
 
     // OpenAI-compatible adapter route (additive; does not affect native v1internal route)
     if (method === "GET" && pathname === "/v1/models") {

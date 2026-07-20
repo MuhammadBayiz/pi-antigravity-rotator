@@ -293,8 +293,22 @@ This package is not exclusive to Pi. It can be consumed by **any** agent or fron
 1. Open your agent's Settings > Providers (or equivalent OpenAI configuration)
 2. Add a new generic/OpenAI-compatible provider
 3. Set the API Base URL to: `http://127.0.0.1:51200/v1/`
-4. Set the API Key to: `antigravity` (or any string, the proxy doesn't validate it)
+4. Set the API Key to: `antigravity` (or any string) — by default the proxy does not validate it. If you set `PI_ROTATOR_CLIENT_KEYS` (see below), set the API Key to one of those keys instead.
 5. You can now use any of the models (e.g. `gemini-3.5-flash-low`, `gemini-3.5-flash-high`, `gemini-3.1-pro-low`, `claude-sonnet-4-6`, `claude-opus-4-6-thinking`, `gpt-oss-120b-medium`) directly in your agent.
+
+### Exposing the rotator as a shared API (client keys)
+
+By default the serving routes (`/v1/*`, `/v1beta/*`) are **unauthenticated** — fine when the proxy is bound to `127.0.0.1` for your own use, but an open relay to your account pool if you expose the port. Before making the rotator reachable by anything other than localhost (a Cloudflare Tunnel, a reverse proxy, a LAN), set:
+
+```bash
+export PI_ROTATOR_CLIENT_KEYS="key-for-consumer-a,key-for-consumer-b"
+```
+
+- Requests to the serving routes must then present one of these keys as `x-api-key` (Anthropic-style), `Authorization: Bearer <key>` (OpenAI-style), or `x-rotator-client-key`. Missing/wrong key → `401`.
+- Use a distinct high-entropy key per consumer so a leaked key can be revoked without disrupting the others.
+- The admin token (`PI_ROTATOR_ADMIN_TOKEN`) is accepted as a superset credential and still separately guards the dashboard + `/api/*` management routes.
+- **agy's forward-proxy (MITM) traffic is exempt** — it reaches the rotator over an authenticated channel (loopback / SSH tunnel) and speaks Google's protocol with a Google token, so it cannot present a client key; the guard recognizes MITM-terminated connections and lets them through.
+- When `PI_ROTATOR_CLIENT_KEYS` is unset the guard stays open (the current single-user default is unchanged).
 
 ### Activation rule
 

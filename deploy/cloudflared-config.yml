@@ -1,0 +1,27 @@
+# cloudflared ingress config for kizoo-prod.
+# Place at /home/kizoo/.cloudflared/config.yml (or /etc/cloudflared/config.yml).
+#
+# Cloudflare Tunnel dials OUT to Cloudflare over the box's IPv6 — no inbound port
+# is opened. Cloudflare then publishes `rotator.<domain>` on its dual-stack
+# anycast, so IPv4-only clients (GitHub runners) can reach the IPv6-only box.
+#
+# Setup (see KIZOO-RUNBOOK.md):
+#   cloudflared tunnel login
+#   cloudflared tunnel create rotator      # prints the <TUNNEL-UUID> + creds json
+#   cloudflared tunnel route dns rotator rotator.<domain>
+#   sudo cloudflared service install       # or run: cloudflared tunnel run rotator
+
+tunnel: REPLACE_WITH_TUNNEL_UUID
+credentials-file: /home/kizoo/.cloudflared/REPLACE_WITH_TUNNEL_UUID.json
+
+ingress:
+  - hostname: rotator.REPLACE_WITH_YOUR_DOMAIN
+    service: http://127.0.0.1:51200
+    originRequest:
+      # The rotator streams SSE; don't let cloudflared buffer or time it out early.
+      disableChunkedEncoding: false
+      connectTimeout: 30s
+      # keep long-lived streaming responses alive
+      noHappyEyeballs: false
+  # Everything else is rejected at the tunnel.
+  - service: http_status:404

@@ -1,0 +1,45 @@
+# systemd unit for the shared rotator on kizoo-prod.
+# Install: sudo cp deploy/pi-antigravity-rotator.service /etc/systemd/system/
+#          sudo systemctl daemon-reload && sudo systemctl enable --now pi-antigravity-rotator
+# Adjust User=, WorkingDirectory=, and the node path for your box.
+
+[Unit]
+Description=Pi Antigravity Rotator (shared account-pool AI proxy)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kizoo
+WorkingDirectory=/home/kizoo/pi-antigravity-rotator-fork
+
+# Loopback only: the raw port is never on the internet. The only two ways in are
+# cloudflared (CI, outbound tunnel -> 127.0.0.1) and the SSH -L tunnel (agy).
+Environment=PI_ROTATOR_BIND_HOST=127.0.0.1
+# MITM on so agy (forward-proxy only, no endpoint override) can be routed.
+Environment=PI_ROTATOR_MITM=on
+Environment=PI_ROTATOR_TELEMETRY=off
+Environment=AGY_AUTO_UPDATE=0
+# Config/account dir (accounts.json, state.json, mitm-certs live here).
+Environment=PI_ROTATOR_DIR=/home/kizoo/.pi-antigravity-rotator
+
+# Secrets (PI_ROTATOR_CLIENT_KEYS, PI_ROTATOR_ADMIN_TOKEN) come from a 0600 file
+# so they never show up in `systemctl show` / journald. See deploy/rotator.env.example.
+EnvironmentFile=/home/kizoo/.pi-antigravity-rotator/rotator.env
+
+# Run the tsx-bootstrapped bin directly with node from the repo (no reliance on a
+# global-install PATH). Set the node path to `command -v node` on your box.
+ExecStart=/usr/bin/node /home/kizoo/pi-antigravity-rotator-fork/bin/pi-antigravity-rotator.js start
+
+Restart=on-failure
+RestartSec=3
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/kizoo/.pi-antigravity-rotator
+
+[Install]
+WantedBy=multi-user.target

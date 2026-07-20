@@ -268,6 +268,13 @@ export function attachMitm(server: Server, opts: MitmOptions): CaFiles {
 				return;
 			}
 			tlsSocket.on("error", () => tlsSocket.destroy());
+			// Mark the terminated socket as MITM-authorized: requests arriving on
+			// it are agy's own forward-proxy traffic (the client already
+			// authenticated to reach the rotator via loopback / SSH tunnel, and
+			// agy speaks Google's protocol with a Google token -- it cannot
+			// present our client key). client-auth.ts's requireClientKey bypasses
+			// the client-key guard for these sockets.
+			(tlsSocket as unknown as { __mitmAuthorized?: boolean }).__mitmAuthorized = true;
 			// Feed the decrypted connection back into the rotator's HTTP server:
 			// agy's `POST /v1internal:streamGenerateContent` then hits the normal
 			// route -> account rotation + per-account outbound proxy.

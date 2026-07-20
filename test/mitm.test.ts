@@ -16,7 +16,18 @@ let caPem: Buffer;
 before(async () => {
 	server = createServer((req, res) => {
 		res.writeHead(200, { "Content-Type": "application/json" });
-		res.end(JSON.stringify({ ok: true, host: req.headers.host, url: req.url }));
+		res.end(
+			JSON.stringify({
+				ok: true,
+				host: req.headers.host,
+				url: req.url,
+				// Set by mitm.ts on the terminated socket so client-auth's guard can
+				// exempt agy's forward-proxy traffic.
+				mitmAuthorized:
+					(req.socket as unknown as { __mitmAuthorized?: boolean })
+						.__mitmAuthorized === true,
+			}),
+		);
 	});
 	attachMitm(server, { certDir, getBlindTunnelProxy: () => undefined });
 	await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
@@ -59,6 +70,11 @@ describe("MITM forward proxy", () => {
 		// The decrypted request reached the server's normal handler.
 		assert.match(body, /"ok":true/);
 		assert.match(body, /v1internal:loadCodeAssist/);
+	});
+
+	it("tags the terminated socket as __mitmAuthorized so the client-key guard exempts it", async () => {
+		const { body } = await connectThenTls("cloudcode-pa.googleapis.com");
+		assert.match(body, /"mitmAuthorized":true/);
 	});
 
 	it("drops a blocked telemetry host (fail-closed, no tunnel)", async () => {

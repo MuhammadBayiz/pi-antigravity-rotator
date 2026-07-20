@@ -149,5 +149,26 @@ switch (command) {
     console.log();
     console.log("Environment:");
     console.log("  PI_ROTATOR_DIR         Config directory override");
+    console.log(
+      "  PI_ROTATOR_CLIENT_KEYS Comma-separated client API keys required on the",
+    );
+    console.log(
+      "                         serving routes (/v1/*, /v1beta/*) when the rotator",
+    );
+    console.log(
+      "                         is exposed as a shared API. Unset = open (loopback",
+    );
+    console.log(
+      "                         default). Clients send it as x-api-key or Bearer.",
+    );
+    console.log(
+      "                         agy's forward-proxy (MITM) traffic is exempt.",
+    );
+    console.log(
+      "  PI_ROTATOR_BIND_HOST   Interface to bind (default 127.0.0.1)",
+    );
+    console.log(
+      "  PI_ROTATOR_ADMIN_TOKEN Token for the dashboard + /api/* management routes",
+    );
     process.exit(command === "help" || command === "--help" ? 0 : 1);
 }
