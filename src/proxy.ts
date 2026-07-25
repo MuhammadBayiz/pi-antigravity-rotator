@@ -943,6 +943,73 @@ const CODE_ASSIST_PASSTHROUGH_ACTIONS = new Set([
 ]);
 
 /**
+ * How many accounts to try for a Code Assist passthrough / transparent forward
+ * before giving up. Residential (Decodo) proxies intermittently drop the
+ * connection ("TypeError: fetch failed"); without a retry a single blip fails
+ * agy's whole eligibility check. Each attempt rotates to a different
+ * account/proxy. Tunable via PI_ROTATOR_PASSTHROUGH_RETRIES (default 3), capped
+ * by the number of accounts.
+ */
+function passthroughMaxAttempts(rotator: AccountRotator): number {
+  const raw = Number.parseInt(
+    process.env.PI_ROTATOR_PASSTHROUGH_RETRIES ?? "",
+    10,
+  );
+  const configured = Number.isFinite(raw) && raw > 0 ? raw : 3;
+  return Math.min(configured, Math.max(1, rotator.getAccountCount()));
+}
+
+export type PassthroughResult =
+  | { ok: true; res: Response }
+  | { ok: false; noAccount: boolean; error: unknown };
+
+/**
+ * Run `attempt` against rotated accounts, retrying ONLY when the upstream fetch
+ * rejects (a connection/proxy failure such as "TypeError: fetch failed") -- not
+ * when Google returns an HTTP error status, which is a real answer and is
+ * returned as-is. Each retry rotates to a different account (hence a different
+ * residential proxy). getActiveAccount/rotateToNext both call startRequest +
+ * ensureValidToken internally; this balances that with finishRequest and
+ * records success/error so a genuinely dead proxy is eventually disabled while a
+ * flaky one recovers on the next success.
+ */
+export async function withPassthroughRotation(
+  rotator: AccountRotator,
+  attempt: (account: AccountRuntime) => Promise<Response>,
+): Promise<PassthroughResult> {
+  const maxAttempts = passthroughMaxAttempts(rotator);
+  let lastErr: unknown = new Error("no healthy account available");
+  let everAcquired = false;
+  for (let i = 1; i <= maxAttempts; i++) {
+    let account: AccountRuntime | null = null;
+    try {
+      account =
+        i === 1
+          ? await rotator.getActiveAccount()
+          : await rotator.rotateToNext();
+    } catch (err) {
+      // Acquisition (incl. ensureValidToken) failed; the rotator cleaned up its
+      // own in-flight counter. Try the next account.
+      lastErr = err;
+      continue;
+    }
+    if (!account) continue; // none available this iteration
+    everAcquired = true;
+    try {
+      const res = await attempt(account);
+      rotator.recordRequest(account);
+      rotator.finishRequest(account);
+      return { ok: true, res };
+    } catch (err) {
+      lastErr = err;
+      rotator.markError(account, `passthrough attempt ${i}/${maxAttempts}: ${err}`);
+      rotator.finishRequest(account);
+    }
+  }
+  return { ok: false, noAccount: !everAcquired, error: lastErr };
+}
+
+/**
  * Forward non-generation Code Assist calls (loadCodeAssist, fetchAvailableModels,
  * etc.) to the real Google endpoint using a rotated account's token, without
  * requiring the {model, request} body shape the generation path expects.
@@ -970,36 +1037,16 @@ async function handleCodeAssistPassthrough(
     throw err;
   }
 
-  const account = await rotator.getActiveAccount();
-  if (!account) {
-    log("Code Assist passthrough: no healthy account available", rotator, "warn");
-    res.writeHead(503, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "All accounts exhausted or disabled" }));
-    return;
-  }
-
-  try {
-    await rotator.ensureValidToken(account);
-  } catch (err) {
-    log(`Code Assist passthrough: token refresh failed: ${err}`, rotator, "error");
-    res.writeHead(502, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "Account token refresh failed" }));
-    return;
-  }
-
   const upstreamHost = pathname.startsWith("/daily-cloudcode-pa")
     ? "https://daily-cloudcode-pa.googleapis.com"
     : "https://cloudcode-pa.googleapis.com";
   const upstreamPath = pathname.replace(/^\/(daily-)?cloudcode-pa/, "");
 
-  // Fail-closed: never send Code Assist passthrough over the real IP.
-  const dispatcher = requireProxyDispatcher(
-    account.config.proxy,
-    account.config.email,
-  );
-
-  try {
-    const upstreamRes = await fetch(`${upstreamHost}${upstreamPath}`, {
+  // Retry across rotated accounts so a single flaky residential proxy doesn't
+  // fail the request. Fail-closed: never send Code Assist passthrough over the
+  // real IP (requireProxyDispatcher throws when an account has no proxy).
+  const result = await withPassthroughRotation(rotator, (account) =>
+    fetch(`${upstreamHost}${upstreamPath}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -1009,21 +1056,34 @@ async function handleCodeAssistPassthrough(
         "Client-Metadata": REQUEST_CLIENT_METADATA,
       },
       body: bodyBuffer,
-      dispatcher,
-    } as any);
+      dispatcher: requireProxyDispatcher(
+        account.config.proxy,
+        account.config.email,
+      ),
+    } as any),
+  );
 
-    const text = await upstreamRes.text();
-    res.writeHead(upstreamRes.status, {
-      "Content-Type": upstreamRes.headers.get("content-type") || "application/json",
-    });
-    res.end(text);
-  } catch (err) {
-    log(`Code Assist passthrough error: ${err}`, rotator, "error");
+  if (!result.ok) {
+    if (result.noAccount) {
+      log("Code Assist passthrough: no healthy account available", rotator, "warn");
+      res.writeHead(503, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "All accounts exhausted or disabled" }));
+      return;
+    }
+    log(`Code Assist passthrough error (all attempts): ${result.error}`, rotator, "error");
     if (!res.headersSent) {
       res.writeHead(502, { "Content-Type": "application/json" });
     }
     res.end(JSON.stringify({ error: "Upstream passthrough failed" }));
+    return;
   }
+
+  const upstreamRes = result.res;
+  const text = await upstreamRes.text();
+  res.writeHead(upstreamRes.status, {
+    "Content-Type": upstreamRes.headers.get("content-type") || "application/json",
+  });
+  res.end(text);
 }
 
 /**
@@ -1055,55 +1115,52 @@ async function handleMitmTransparent(
     }
   }
 
-  const account = await rotator.getActiveAccount();
-  if (!account) {
-    res.writeHead(503, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "All accounts exhausted or disabled" }));
-    return;
-  }
-  try {
-    await rotator.ensureValidToken(account);
-  } catch (err) {
-    log(`MITM transparent: token refresh failed: ${err}`, rotator, "error");
-    res.writeHead(502, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "Account token refresh failed" }));
-    return;
-  }
-
-  // Fail-closed: never forward over the real IP.
-  const dispatcher = requireProxyDispatcher(account.config.proxy, account.config.email);
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${account.accessToken}`,
+  // Per-request headers (same for every account); token + proxy are per-account.
+  const baseHeaders: Record<string, string> = {
     "User-Agent": REQUEST_USER_AGENT,
     "X-Goog-Api-Client": REQUEST_GOOG_API_CLIENT,
     "Client-Metadata": REQUEST_CLIENT_METADATA,
   };
   const ct = req.headers["content-type"];
-  if (bodyBuffer && bodyBuffer.length && typeof ct === "string") headers["Content-Type"] = ct;
+  if (bodyBuffer && bodyBuffer.length && typeof ct === "string") baseHeaders["Content-Type"] = ct;
   const accept = req.headers["accept"];
-  if (typeof accept === "string") headers["Accept"] = accept;
+  if (typeof accept === "string") baseHeaders["Accept"] = accept;
 
-  try {
-    const upstreamRes = await fetch(`https://${host}${req.url}`, {
+  // Retry across rotated accounts so a flaky residential proxy doesn't fail the
+  // forward. Fail-closed: never forward over the real IP.
+  const result = await withPassthroughRotation(rotator, (account) =>
+    fetch(`https://${host}${req.url}`, {
       method,
-      headers,
+      headers: {
+        ...baseHeaders,
+        Authorization: `Bearer ${account.accessToken}`,
+      },
       body: bodyBuffer,
-      dispatcher,
-    } as any);
+      dispatcher: requireProxyDispatcher(account.config.proxy, account.config.email),
+    } as any),
+  );
 
-    const outHeaders: Record<string, string> = {};
-    const ctOut = upstreamRes.headers.get("content-type");
-    if (ctOut) outHeaders["Content-Type"] = ctOut;
-    res.writeHead(upstreamRes.status, outHeaders);
-    if (upstreamRes.body) {
-      Readable.fromWeb(upstreamRes.body as any).pipe(res);
-    } else {
-      res.end();
+  if (!result.ok) {
+    if (result.noAccount) {
+      res.writeHead(503, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "All accounts exhausted or disabled" }));
+      return;
     }
-  } catch (err) {
-    log(`MITM transparent forward error: ${err}`, rotator, "error");
+    log(`MITM transparent forward error (all attempts): ${result.error}`, rotator, "error");
     if (!res.headersSent) res.writeHead(502, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "Upstream forward failed" }));
+    return;
+  }
+
+  const upstreamRes = result.res;
+  const outHeaders: Record<string, string> = {};
+  const ctOut = upstreamRes.headers.get("content-type");
+  if (ctOut) outHeaders["Content-Type"] = ctOut;
+  res.writeHead(upstreamRes.status, outHeaders);
+  if (upstreamRes.body) {
+    Readable.fromWeb(upstreamRes.body as any).pipe(res);
+  } else {
+    res.end();
   }
 }
 
