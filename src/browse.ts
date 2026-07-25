@@ -9,6 +9,11 @@
 // Usage:
 //   pi-antigravity-rotator browse --account <email> <url>
 //   pi-antigravity-rotator browse --proxy <proxy-url> <url>
+//   pi-antigravity-rotator browse --proxy-env <ENV_VAR> <url>
+//
+// --proxy-env reads the proxy URL from the named environment variable instead
+// of the command line, so residential-proxy credentials never appear in argv
+// (ps/​/proc/<pid>/cmdline) or shell history.
 
 import { loadOrCreateAccountsConfig } from "./account-store.js";
 import { launchProxiedBrowser } from "./browser-launch.js";
@@ -21,14 +26,21 @@ function argValue(args: string[], flag: string): string | undefined {
 
 export async function runBrowse(args: string[]): Promise<void> {
 	const email = argValue(args, "--account");
-	let proxyUrl = argValue(args, "--proxy");
+	const proxyEnvVar = argValue(args, "--proxy-env");
+	let proxyUrl =
+		argValue(args, "--proxy") ??
+		(proxyEnvVar ? process.env[proxyEnvVar] : undefined);
+	if (proxyEnvVar && !proxyUrl) {
+		console.error(`--proxy-env ${proxyEnvVar}: environment variable is empty or unset.`);
+		process.exit(1);
+	}
 	// The target URL is the http(s) argument (the proxy is socks5h:// or http
 	// proxy host:port, but we match the target as a full http(s) URL that is not
 	// the --proxy value).
 	const url = args.find((a) => /^https?:\/\//i.test(a) && a !== proxyUrl);
 
 	if (!url) {
-		console.error("Usage: pi-antigravity-rotator browse (--account <email> | --proxy <url>) <https-url>");
+		console.error("Usage: pi-antigravity-rotator browse (--account <email> | --proxy <url> | --proxy-env <ENV_VAR>) <https-url>");
 		process.exit(1);
 	}
 
