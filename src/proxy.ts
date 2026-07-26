@@ -959,6 +959,53 @@ function passthroughMaxAttempts(rotator: AccountRotator): number {
   return Math.min(configured, Math.max(1, rotator.getAccountCount()));
 }
 
+// Upper bound on the connect + response-headers phase of a proxied passthrough
+// fetch. undici's ProxyAgent defaults headersTimeout to 300s, and a fresh agent
+// is built per request (no warm pool), so an intermittently slow/stalled
+// residential-proxy CONNECT to Google would hang the whole request for tens of
+// seconds. agy's eligibility check (loadCodeAssist / get-operation-status) then
+// exceeds its own timeout and drops to a sign-in screen even though the pool is
+// healthy. We abort the attempt if no response headers arrive in time; the timer
+// is cleared the instant they do, so a legitimately long STREAMING body is never
+// cut off mid-flight -- only the connect+headers phase is bounded. On abort the
+// fetch rejects and withPassthroughRotation rotates to a different account (a
+// fresh proxy tunnel), which is typically fast. Tunable without redeploy.
+const PASSTHROUGH_HEADERS_TIMEOUT_MS = (() => {
+  const raw = Number.parseInt(
+    process.env.PI_ROTATOR_PASSTHROUGH_HEADERS_TIMEOUT_MS ?? "",
+    10,
+  );
+  return Number.isFinite(raw) && raw > 0 ? raw : 8_000;
+})();
+
+/**
+ * fetch() for a proxied passthrough attempt, bounding only the time-to-response-
+ * headers (see PASSTHROUGH_HEADERS_TIMEOUT_MS). Mirrors the AbortController +
+ * clearTimeout-after-headers pattern the streaming generation path already uses,
+ * so streaming response bodies are not aborted once they start flowing.
+ */
+async function passthroughFetch(
+  input: string,
+  init: Omit<RequestInit, "body"> & {
+    dispatcher: unknown;
+    body?: RequestInit["body"] | Buffer;
+  },
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () =>
+      controller.abort(
+        new Error(`passthrough headers timeout after ${PASSTHROUGH_HEADERS_TIMEOUT_MS}ms`),
+      ),
+    PASSTHROUGH_HEADERS_TIMEOUT_MS,
+  );
+  try {
+    return await fetch(input, { ...init, signal: controller.signal } as any);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export type PassthroughResult =
   | { ok: true; res: Response }
   | { ok: false; noAccount: boolean; error: unknown };
@@ -1046,7 +1093,7 @@ async function handleCodeAssistPassthrough(
   // fail the request. Fail-closed: never send Code Assist passthrough over the
   // real IP (requireProxyDispatcher throws when an account has no proxy).
   const result = await withPassthroughRotation(rotator, (account) =>
-    fetch(`${upstreamHost}${upstreamPath}`, {
+    passthroughFetch(`${upstreamHost}${upstreamPath}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -1060,7 +1107,7 @@ async function handleCodeAssistPassthrough(
         account.config.proxy,
         account.config.email,
       ),
-    } as any),
+    }),
   );
 
   if (!result.ok) {
@@ -1129,7 +1176,7 @@ async function handleMitmTransparent(
   // Retry across rotated accounts so a flaky residential proxy doesn't fail the
   // forward. Fail-closed: never forward over the real IP.
   const result = await withPassthroughRotation(rotator, (account) =>
-    fetch(`https://${host}${req.url}`, {
+    passthroughFetch(`https://${host}${req.url}`, {
       method,
       headers: {
         ...baseHeaders,
@@ -1137,7 +1184,7 @@ async function handleMitmTransparent(
       },
       body: bodyBuffer,
       dispatcher: requireProxyDispatcher(account.config.proxy, account.config.email),
-    } as any),
+    }),
   );
 
   if (!result.ok) {
