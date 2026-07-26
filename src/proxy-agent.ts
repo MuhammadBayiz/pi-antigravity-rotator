@@ -23,18 +23,50 @@ import { socksDispatcher } from "fetch-socks";
  *  - HTTP/HTTPS: undici ProxyAgent tunnels via HTTP CONNECT, so the proxy does
  *    the hostname resolution. This matches the residential (Decodo) setup.
  */
+// One dispatcher per distinct proxy URL, reused across requests. A fresh
+// dispatcher per request forced a cold CONNECT tunnel (TCP to the ISP proxy +
+// CONNECT + TLS to Google) every single time, whose latency through a residential
+// proxy is high and variable (measured 2-19s, occasionally stalling). Reusing the
+// dispatcher lets undici keep the tunnel alive, so the rapid burst of requests in
+// an agy session reuse a warm tunnel after the first and stay fast. Keyed by the
+// full URL (creds + port), so each account stays isolated on its own proxy.
+const dispatcherCache = new Map<string, any>();
+
+// Hold idle keep-alive connections long enough to bridge an agy user's think-time
+// between requests (undici's default is only ~4s). Bounded so a truly dead tunnel
+// is eventually dropped and rebuilt.
+const KEEP_ALIVE_TIMEOUT_MS = 60_000;
+const KEEP_ALIVE_MAX_TIMEOUT_MS = 10 * 60_000;
+
 export function getProxyAgent(proxyUrl: string): any {
+  const cached = dispatcherCache.get(proxyUrl);
+  if (cached) return cached;
+
+  let dispatcher: any;
   if (proxyUrl.startsWith("socks5://") || proxyUrl.startsWith("socks5h://")) {
     const parsed = new URL(proxyUrl);
-    return socksDispatcher({
-      type: 5,
-      host: parsed.hostname,
-      port: parseInt(parsed.port, 10) || 1080,
-      userId: parsed.username ? decodeURIComponent(parsed.username) : undefined,
-      password: parsed.password ? decodeURIComponent(parsed.password) : undefined,
+    dispatcher = socksDispatcher(
+      {
+        type: 5,
+        host: parsed.hostname,
+        port: parseInt(parsed.port, 10) || 1080,
+        userId: parsed.username ? decodeURIComponent(parsed.username) : undefined,
+        password: parsed.password ? decodeURIComponent(parsed.password) : undefined,
+      },
+      {
+        keepAliveTimeout: KEEP_ALIVE_TIMEOUT_MS,
+        keepAliveMaxTimeout: KEEP_ALIVE_MAX_TIMEOUT_MS,
+      },
+    );
+  } else {
+    dispatcher = new ProxyAgent({
+      uri: proxyUrl,
+      keepAliveTimeout: KEEP_ALIVE_TIMEOUT_MS,
+      keepAliveMaxTimeout: KEEP_ALIVE_MAX_TIMEOUT_MS,
     });
   }
-  return new ProxyAgent({ uri: proxyUrl });
+  dispatcherCache.set(proxyUrl, dispatcher);
+  return dispatcher;
 }
 
 /**
